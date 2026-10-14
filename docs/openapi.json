@@ -1,0 +1,497 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Scheme API",
+    "description": "Scheme data (from SAP files in GCS) for the client team.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/schemes/current-month": {
+      "post": {
+        "tags": [
+          "schemes"
+        ],
+        "summary": "API 1: a dealer's scheme rows for the requested month",
+        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row's month is the GCS month folder its SAP file came from. Returns an empty list when the\ndealer has no data for that month.",
+        "operationId": "month_schemes_v1_schemes_current_month_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchemeMonthRequest"
+              },
+              "examples": {
+                "valid": {
+                  "summary": "Dealer and month",
+                  "value": {
+                    "dealer_code": "6100000001",
+                    "month": 10,
+                    "year": 2026
+                  }
+                },
+                "numbers_as_strings": {
+                  "summary": "Dealer code as a number, month and year as strings",
+                  "value": {
+                    "dealer_code": 6100000001,
+                    "month": "10",
+                    "year": "2026"
+                  }
+                },
+                "leading_zeros": {
+                  "summary": "Leading zeros and spaces are ignored",
+                  "value": {
+                    "dealer_code": "  0006100000001 ",
+                    "month": 10,
+                    "year": 2026
+                  }
+                },
+                "invalid_month": {
+                  "summary": "Month 13 (422)",
+                  "value": {
+                    "dealer_code": "6100000001",
+                    "month": 13,
+                    "year": 2026
+                  }
+                },
+                "invalid_missing_year": {
+                  "summary": "Year missing (422)",
+                  "value": {
+                    "dealer_code": "6100000001",
+                    "month": 10
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The dealer's rows (empty list when there are none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SchemeRow"
+                  },
+                  "type": "array",
+                  "title": "Response Month Schemes V1 Schemes Current Month Post"
+                },
+                "examples": {
+                  "rows": {
+                    "summary": "Dealer with data (3 of the 8 components shown)",
+                    "value": [
+                      {
+                        "Customer": "6100000001",
+                        "FromDate": "2026-10-01",
+                        "ToDate": "2026-10-11",
+                        "ComponentDescription": "EB SLAB 1",
+                        "Qualification": 405232.86,
+                        "GsrB": 405232.86,
+                        "RebateRate": 0.75,
+                        "ClearCut": 0.0,
+                        "ShortfallAmount": 0.0,
+                        "ShortfallPct": 0.0
+                      },
+                      {
+                        "Customer": "6100000001",
+                        "FromDate": "2026-10-01",
+                        "ToDate": "2026-10-31",
+                        "ComponentDescription": "LUXURY",
+                        "Qualification": 315.1,
+                        "GsrB": 159292.8,
+                        "RebateRate": 1.0,
+                        "ClearCut": 1592.93,
+                        "ShortfallAmount": 84.9,
+                        "ShortfallPct": 21.23
+                      },
+                      {
+                        "Customer": "6100000001",
+                        "FromDate": "2026-10-01",
+                        "ToDate": "2026-10-31",
+                        "ComponentDescription": "EB FULL MONTH",
+                        "Qualification": 405232.86,
+                        "GsrB": 405232.86,
+                        "RebateRate": 2.25,
+                        "ClearCut": 0.0,
+                        "ShortfallAmount": 0.0,
+                        "ShortfallPct": 0.0
+                      }
+                    ]
+                  },
+                  "empty": {
+                    "summary": "No data for this dealer or month",
+                    "value": []
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-API-Key missing or wrong (only when the server has API_KEY set)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Invalid or missing API key"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than MAX_BODY_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Request body too large"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body failed validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                },
+                "example": {
+                  "detail": [
+                    {
+                      "loc": [
+                        "body",
+                        "dealer_code"
+                      ],
+                      "msg": "Field required",
+                      "type": "missing"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; details are logged, not returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Internal server error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No free database connection; retry after the Retry-After seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Service busy, please retry"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorMessage": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorMessage",
+        "description": "Body of 401, 413, 500 and 503 responses."
+      },
+      "SchemeMonthRequest": {
+        "properties": {
+          "dealer_code": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9]+$",
+            "title": "Dealer Code",
+            "description": "SAP customer code; letters and digits only. Leading zeros are ignored.",
+            "examples": [
+              "6100000001"
+            ]
+          },
+          "month": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Month",
+            "description": "1-12",
+            "examples": [
+              10
+            ]
+          },
+          "year": {
+            "type": "integer",
+            "maximum": 2100.0,
+            "minimum": 2000.0,
+            "title": "Year",
+            "description": "Four-digit year",
+            "examples": [
+              2026
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "dealer_code",
+          "month",
+          "year"
+        ],
+        "title": "SchemeMonthRequest",
+        "description": "API 1 body: the dealer and the month to return. Month and year may be JSON numbers or numeric strings."
+      },
+      "SchemeRow": {
+        "properties": {
+          "Customer": {
+            "type": "string",
+            "title": "Customer"
+          },
+          "FromDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fromdate"
+          },
+          "ToDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Todate"
+          },
+          "ComponentDescription": {
+            "type": "string",
+            "title": "Componentdescription",
+            "examples": [
+              "EB SLAB 1"
+            ]
+          },
+          "Qualification": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification",
+            "description": "GSR for EB and Value (GSR (Q); for EB FULL MONTH, GSR (B)); invoiced quantity (Q) for Luxury and Premium"
+          },
+          "GsrB": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gsrb"
+          },
+          "RebateRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebaterate"
+          },
+          "ClearCut": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clearcut"
+          },
+          "ShortfallAmount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfallamount"
+          },
+          "ShortfallPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfallpct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "Customer",
+          "FromDate",
+          "ToDate",
+          "ComponentDescription",
+          "Qualification",
+          "GsrB",
+          "RebateRate",
+          "ClearCut",
+          "ShortfallAmount",
+          "ShortfallPct"
+        ],
+        "title": "SchemeRow",
+        "description": "One component row, with the columns of the API template. Keys are PascalCase, like the other dealer APIs."
+      },
+      "ValidationErrorResponse": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ValidationErrorResponse",
+        "description": "Body of a 422: where and why the request failed. The caller's input is not echoed back."
+      },
+      "ValidationIssue": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Loc",
+            "examples": [
+              [
+                "body",
+                "month"
+              ]
+            ]
+          },
+          "msg": {
+            "type": "string",
+            "title": "Msg",
+            "examples": [
+              "Input should be less than or equal to 12"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "examples": [
+              "less_than_equal"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationIssue"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+# Real settings (.env.local, .env.dev, .env.uat, .env.prod) hold secrets: never commit them.
+.env.*
+!.env.example
+local_data/
+*.json.key
+service-account*.json
+data/
+.DS_Store
+
+# QA outputs
+qa/api-tests/node_modules/
+qa/api-tests/test-results/
+qa/api-tests/playwright-report/
+qa/k6/reports/*
+!qa/k6/reports/.gitkeep
+qa/security/reports/*
+!qa/security/reports/.gitkeep
+
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

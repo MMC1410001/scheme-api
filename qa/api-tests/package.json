@@ -1,0 +1,19 @@
+{
+  "name": "scheme-api-tests",
+  "private": true,
+  "description": "Playwright API test suite for the Scheme API",
+  "scripts": {
+    "test": "playwright test",
+    "test:api1": "playwright test tests/api1_current_month.spec.js",
+    "test:common": "playwright test tests/common.spec.js",
+    "test:functional": "playwright test --grep @functional",
+    "test:validation": "playwright test --grep @validation",
+    "test:edge": "playwright test --grep @edge",
+    "test:negative": "playwright test --grep @negative",
+    "test:security": "playwright test --grep @security",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.57.0"
+  }
+}
