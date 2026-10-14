@@ -298,6 +298,16 @@ Key design points:
   existing row is replaced only if the new one has a newer or equal "Last Updated" time, so files
   can arrive in any order.
 - **One transaction per file.** A file is either fully loaded or not at all.
+- **Fast loading.** The next `LOADER_WORKERS` files (default 4) are downloaded and parsed in
+  parallel while the current one is saved (still one at a time, in order). Each file's rows go to
+  the database with one bulk `COPY` into a temporary table and one `INSERT … SELECT … ON CONFLICT`,
+  which gives exactly the result of upserting the rows one by one (proved by a randomized database
+  test). Real September files: about 6 s per file from a laptop (download-bound), against about 30 s
+  with one statement per row; saving takes 0.3–0.5 s.
+- **One run at a time.** A Postgres advisory lock stops a second run (e.g. the next cron run during
+  a long backfill); it is released when the run's connection closes, even if the process dies.
+  After a network drop the server may keep the old session (and the lock) alive; the run names its
+  sessions, so on reconnect it ends its own stale session and carries on.
 - **Fail loudly on format changes.** If a required column is missing, the file fails with an error
   that lists the missing and available columns; nothing is loaded from it.
 - **Row-level tolerance.** A row with an unparseable value is skipped and logged; the rest of the
@@ -513,6 +523,7 @@ are available for per-environment releases.
 | `REPORT_DEALER_COLUMN` | `customer` | Dealer column in reports after joining the headers |
 | `APP_ENV` | `local` | Which settings file to read: `.env.local`, `.env.dev`, `.env.uat` or `.env.prod` |
 | `LOCAL_DATA_DIR` | — | Read files from a local folder instead of GCS (development) |
+| `LOADER_WORKERS` | `4` | Files the cron job downloads and parses in parallel while saving the current one |
 | `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 18.1) |
 | `REDIS_URL` | — | Redis for the cache, e.g. `redis://host:6379/0`; the cache runs only when this is set and `CACHE_ENABLED=true` |
 | `CACHE_TTL_SECONDS` | `900` | Longest a cached response lives; new data replaces it sooner |
@@ -665,7 +676,7 @@ reports, and the real report sample for the data check and the API 2 load test).
 
 | Suite | Result |
 |---|---|
-| Unit tests (pytest) | 119 / 119 passed |
+| Unit tests (pytest) | 142 / 142 passed; 13 database tests (`TEST_DATABASE_URL`) passed against local Postgres |
 | Postman / newman — API 1 collection | 115 / 115 assertions passed (27 requests) |
 | Playwright — API 1 | 65 / 65 passed |
 | Playwright — common | 4 passed (incl. API 2 returns 404), 1 skipped (HTTPS redirect check needs the deployed URL) |
@@ -698,6 +709,7 @@ Issues found by testing and fixed before this release:
 | No request size limit | Security tests | 4 KB body limit |
 | SAP negative numbers (`882.00-`) would have been rejected | Real SAP file test | Trailing-minus parsing |
 | API could not keep up with 1 lakh requests a minute | k6 `rate.js` | Redis response cache; plain-ASGI headers middleware and async light dependencies (cache-hit ceiling 1,705/s → 2,922/s) |
+| Loading a month took hours over the VPN (~30 s per file) | Live load of September | Parallel downloads + one bulk `COPY` per file (~6 s per file); one run at a time; `--limit` |
 
 Performance figures come from a laptop and show relative behaviour; they should be re-measured on
 the deployed environment.

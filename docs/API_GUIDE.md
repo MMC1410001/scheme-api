@@ -290,7 +290,7 @@ case index and full commands follow it. Latest results: `qa/TEST_RESULTS.md`.
 
 | Layer | Tool | Location | What it covers |
 |---|---|---|---|
-| Unit | pytest | `tests/` | 119 tests: parsing rules, report parsing, response shape, security middleware, Redis cache, Postman and Swagger coverage (no server needed) |
+| Unit | pytest | `tests/` | 142 tests (+ 13 database tests): parsing rules, report parsing, response shape, security middleware, Redis cache, Postman and Swagger coverage (no server needed) |
 | Functional & negative | Postman / newman | `qa/postman/` | API 1 collection: 27 requests / 115 assertions (API 2's is not generated while on hold) |
 | Full API suite | Playwright | `qa/api-tests/` | 70 cases: `api1_current_month.spec.js` (65), `common.spec.js` (5, incl. API 2 stays unreachable); `api2_report.spec.js` (56) not run while on hold |
 | Performance | k6 | `qa/k6/` | Smoke, load (150 VUs), stress (600 VUs), spike (500 VUs), fixed rate (`rate.js`, 1,700 requests/s = 1 lakh a minute); API 1 |

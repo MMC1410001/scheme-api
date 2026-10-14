@@ -263,6 +263,19 @@ database. Each `schemes` run:
    only replaced by a newer "Last Updated" version, so re-runs and overlapping files never create
    duplicates.
 
+How it loads quickly (a month has ~530 files of ~15 MB):
+
+- The next `LOADER_WORKERS` files (default 4) are downloaded and parsed in parallel while the
+  current one is saved. Files are still saved one at a time, in order, each in one transaction.
+- A file's rows go to the database in one bulk `COPY` and one upsert, not one statement per row.
+- Measured on real September files from a laptop: about 6 s per file (download-bound, ~3 MB/s),
+  against about 30 s before; saving takes 0.3–0.5 s per file. More workers don't help on a
+  connection that is already full.
+- Only one run at a time: a run that finds another still going (e.g. a long backfill when the next
+  cron run starts) logs a warning and stops.
+- `--limit N` loads only the first N new files (for testing); each file's log line shows its read
+  and save time.
+
 (API 2, on hold) Each `reports` run lists `automated-generated-files/output/`, picks the latest report (see the
 business rules) and loads it only if that file (path + GCS version) isn't loaded yet. Until a new
 report is loaded, API 2 keeps serving the previous one.

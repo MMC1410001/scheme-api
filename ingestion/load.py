@@ -18,11 +18,26 @@ SCHEME_FIELDS = (
 # Keep only the newest version of each row: an older update (e.g. a file loaded
 # out of order) never overwrites a newer one.
 _COLUMNS = ", ".join(SCHEME_FIELDS)
-_PLACEHOLDERS = ", ".join(["%s"] * len(SCHEME_FIELDS))
 _UPDATES = ", ".join(f"{f} = EXCLUDED.{f}" for f in SCHEME_FIELDS if f not in SCHEME_KEY)
-_UPSERT_SCHEME = (
-    f"INSERT INTO scheme_records ({_COLUMNS}) VALUES ({_PLACEHOLDERS}) "  # nosec B608: fixed column names; values are %s params
-    f"ON CONFLICT ({', '.join(SCHEME_KEY)}) DO UPDATE SET {_UPDATES} "
+_KEY = ", ".join(SCHEME_KEY)
+# A file's rows are copied into a staging table in one round trip (COPY), then upserted with one
+# statement, instead of one INSERT per row (~5,500 per file), which is slow over a remote link.
+# The staging table is made fresh for each file, so it always matches scheme_records (constraints
+# and defaults included) and never holds an earlier file's rows, however the caller manages transactions.
+_DROP_STAGE = "DROP TABLE IF EXISTS pg_temp.scheme_stage"
+_CREATE_STAGE = (
+    "CREATE TEMP TABLE scheme_stage (LIKE scheme_records INCLUDING CONSTRAINTS INCLUDING DEFAULTS, ord BIGINT NOT NULL) "
+    "ON COMMIT DROP"
+)
+_COPY_STAGE = f"COPY pg_temp.scheme_stage ({_COLUMNS}, ord) FROM STDIN"  # nosec B608: fixed column names
+# Same result as upserting the rows one by one in file order: within the file the newest
+# "Last Updated" wins and a tie goes to the later row (ord); against the table, a row only
+# replaces a stored one that is not newer.
+_UPSERT_STAGE = (
+    f"INSERT INTO scheme_records ({_COLUMNS}) "  # nosec B608: fixed column names, no values in the SQL
+    f"SELECT DISTINCT ON ({_KEY}) {_COLUMNS} FROM pg_temp.scheme_stage "
+    f"ORDER BY {_KEY}, last_updated_at DESC, ord DESC "
+    f"ON CONFLICT ({_KEY}) DO UPDATE SET {_UPDATES} "
     "WHERE EXCLUDED.last_updated_at >= scheme_records.last_updated_at"
 )
 
@@ -40,11 +55,13 @@ def save_scheme_file(
 ) -> None:
     with conn.transaction():
         _replace_file(conn, "scheme", file, year, month, len(records))
+        conn.execute(_DROP_STAGE)
+        conn.execute(_CREATE_STAGE)
         with conn.cursor() as cur:
-            cur.executemany(
-                _UPSERT_SCHEME,
-                [tuple(Jsonb(r[f]) if f == "raw" else r[f] for f in SCHEME_FIELDS) for r in records],
-            )
+            with cur.copy(_COPY_STAGE) as copy:
+                for ord_, r in enumerate(records):
+                    copy.write_row([*(Jsonb(r[f]) if f == "raw" else r[f] for f in SCHEME_FIELDS), ord_])
+            cur.execute(_UPSERT_STAGE)
 
 
 def save_report_file(
