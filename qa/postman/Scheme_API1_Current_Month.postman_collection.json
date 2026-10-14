@@ -1,0 +1,1396 @@
+{
+  "info": {
+    "_postman_id": "48c00caa-634f-5ed5-80a0-75316dc4c11e",
+    "name": "Scheme API 1 - Monthly schemes",
+    "description": "API 1: POST /v1/schemes/current-month with {dealer_code, month, year} returns the dealer's rows for the 8 template components in that month. month/year default to the current month (India time); set `month` and `year` in the environment to test another month.\n\n1. Import this collection and an environment (Local or Dev) from the same folder.\n2. Pick the environment, set `apiKey` if the server requires one.\n3. Run a request, or run the whole collection (Runner) to execute every test.\n\nFull guide: qa/README.md and docs/API_GUIDE.md in the repository.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}"
+      },
+      {
+        "key": "in",
+        "value": "header"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const india = new Date(Date.now() + 5.5 * 3600 * 1000);",
+          "if (!pm.environment.get(\"month\")) pm.collectionVariables.set(\"month\", india.getUTCMonth() + 1);",
+          "if (!pm.environment.get(\"year\")) pm.collectionVariables.set(\"year\", india.getUTCFullYear());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test(\"Responds within 2 seconds\", () => pm.expect(pm.response.responseTime).to.be.below(2000));",
+          "pm.test(\"No stack trace or internal details in the body\", () => { const t = pm.response.text(); [\"Traceback\", \".py\\\"\", \"psycopg\", \"SELECT \"].forEach(s => pm.expect(t).to.not.include(s)); });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "api1RowCount",
+      "value": ""
+    },
+    {
+      "key": "month",
+      "value": ""
+    },
+    {
+      "key": "year",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Liveness check. No API key needed.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body is {ok: true}\", () => pm.expect(pm.response.json()).to.eql({ok: true}));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Monthly schemes",
+      "item": [
+        {
+          "name": "Monthly schemes - dealer code as string",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "Returns the dealer's rows for the 8 template components in the given month, ordered by end date. `month` and `year` default to the current month (India time) unless the environment sets them.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body is a JSON array\", () => pm.expect(pm.response.json()).to.be.an(\"array\"));",
+                  "const rows = pm.response.json();",
+                  "pm.test(\"Dealer has rows (needs sample data loaded)\", () => pm.expect(rows.length).to.be.above(0));",
+                  "const FIELDS = [\"Customer\",\"FromDate\",\"ToDate\",\"ComponentDescription\",\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\"];",
+                  "const COMPONENTS = [\"EB SLAB 1\", \"EB SLAB 2\", \"EB SLAB 3\", \"VALUE\", \"LUXURY\", \"PREMIUM 01\", \"PREMIUM 02\", \"EB FULL MONTH\"];",
+                  "pm.test(\"Every row has exactly the template fields\", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(FIELDS)));",
+                  "pm.test(\"Only the 8 template components are returned\", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));",
+                  "pm.test(\"Customer matches the requested dealer\", () => rows.forEach(r => pm.expect(r.Customer).to.eql(pm.collectionVariables.get(\"dealerCode\") || pm.environment.get(\"dealerCode\"))));",
+                  "pm.test(\"Dates are YYYY-MM-DD and FromDate <= ToDate\", () => rows.forEach(r => { pm.expect(r.FromDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.ToDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.FromDate <= r.ToDate).to.be.true; }));",
+                  "pm.test(\"Amounts are numbers (or null)\", () => rows.forEach(r => [\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\"].forEach(k => pm.expect(r[k] === null || typeof r[k] === \"number\").to.be.true)));",
+                  "pm.test(\"Rows are ordered by ToDate, then template order\", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i]; pm.expect(a.ToDate < b.ToDate || (a.ToDate === b.ToDate && COMPONENTS.indexOf(a.ComponentDescription) <= COMPONENTS.indexOf(b.ComponentDescription))).to.be.true; } });",
+                  "const prefix = pm.variables.get(\"year\") + \"-\" + String(pm.variables.get(\"month\")).padStart(2, \"0\");",
+                  "pm.test(\"Rows belong to the requested month\", () => rows.forEach(r => pm.expect(r.FromDate.startsWith(prefix) || r.ToDate.startsWith(prefix)).to.be.true));",
+                  "pm.test(\"EB FULL MONTH Qualification is its GSR (GsrB), like the EB slabs\", () => rows.filter(r => r.ComponentDescription === \"EB FULL MONTH\").forEach(r => pm.expect(r.Qualification).to.eql(r.GsrB)));",
+                  "pm.collectionVariables.set(\"api1RowCount\", rows.length);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - rows for a dealer",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"dealer_code\": \"6100000001\",\n  \"month\": 10,\n  \"year\": 2026\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/schemes/current-month",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "schemes",
+                    "current-month"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-11\",\n    \"ComponentDescription\": \"EB SLAB 1\",\n    \"Qualification\": 405232.86,\n    \"GsrB\": 405232.86,\n    \"RebateRate\": 0.75,\n    \"ClearCut\": 0.0,\n    \"ShortfallAmount\": 0.0,\n    \"ShortfallPct\": 0.0\n  },\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-31\",\n    \"ComponentDescription\": \"LUXURY\",\n    \"Qualification\": 315.1,\n    \"GsrB\": 159292.8,\n    \"RebateRate\": 1.0,\n    \"ClearCut\": 1592.93,\n    \"ShortfallAmount\": 84.9,\n    \"ShortfallPct\": 21.23\n  }\n]"
+            },
+            {
+              "name": "200 - dealer with no data that month",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"dealer_code\": \"6199999999\",\n  \"month\": 10,\n  \"year\": 2026\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/schemes/current-month",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "schemes",
+                    "current-month"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[]"
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - dealer code as number",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "The code may be sent as a JSON number.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": {{dealerCode}},\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body is a JSON array\", () => pm.expect(pm.response.json()).to.be.an(\"array\"));",
+                  "pm.test(\"Same row count as the first request\", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get(\"api1RowCount\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - leading zeros ignored",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "0006100000001 and 6100000001 are the same dealer.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"000{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Same row count as the first request\", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get(\"api1RowCount\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - month and year as strings",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "\"10\" and 10 are both accepted.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"{{month}}\",\n  \"year\": \"{{year}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Same row count as the first request\", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get(\"api1RowCount\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - month with no data returns []",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 1,\n  \"year\": 2000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body is an empty array\", () => pm.expect(pm.response.json()).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - unknown dealer returns []",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{unknownDealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body is an empty array\", () => pm.expect(pm.response.json()).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Negative cases",
+      "item": [
+        {
+          "name": "Missing month -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing year -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 13 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 13,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year 1999 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": 1999\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Boolean month -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": true,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing dealer_code -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Empty dealer_code -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Whitespace dealer_code -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"   \",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Null dealer_code -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": null,\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Special characters -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"6100-0001\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Longer than 20 characters -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"111111111111111111111\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid JSON -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"dealer_code\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET instead of POST -> 405",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 405\", () => pm.response.to.have.status(405));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown route -> 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/unknown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "unknown"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Security",
+      "item": [
+        {
+          "name": "No API key -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "Only when the server has API_KEY set.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong API key -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key"
+                },
+                {
+                  "key": "value",
+                  "value": "wrong-key"
+                },
+                {
+                  "key": "in",
+                  "value": "header"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "SQL injection payload is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"1' OR '1'='1\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));",
+                  "pm.test(\"Input is not echoed back\", () => pm.expect(pm.response.text()).to.not.include(\"1' OR '1'='1\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Script payload is rejected and not reflected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"<script>alert(1)</script>\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error lists what failed\", () => pm.expect(pm.response.json().detail).to.be.an(\"array\"));",
+                  "pm.test(\"Input is not echoed back\", () => pm.expect(pm.response.text()).to.not.include(\"<script>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Oversized body -> 413",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"dealer_code\": \"11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 413\", () => pm.response.to.have.status(413));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Security headers are present",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"HSTS max-age >= 1 year\", () => pm.expect(Number((pm.response.headers.get(\"Strict-Transport-Security\") || \"\").match(/max-age=(\\d+)/)[1])).to.be.at.least(31536000));",
+                  "pm.test(\"Content-Security-Policy present\", () => pm.expect(pm.response.headers.get(\"Content-Security-Policy\")).to.be.a(\"string\"));",
+                  "pm.test(\"X-Frame-Options: DENY\", () => pm.expect(pm.response.headers.get(\"X-Frame-Options\")).to.eql(\"DENY\"));",
+                  "pm.test(\"No X-Powered-By header\", () => pm.expect(pm.response.headers.has(\"X-Powered-By\")).to.be.false);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
