@@ -181,7 +181,7 @@ Pass = no bandit issues, no known vulnerabilities, and ZAP `FAIL-NEW: 0`. Report
 | `api-tests/` | Playwright (API only) | 70 test cases run: `api1_current_month.spec.js` (65), `common.spec.js` (5); `api2_report.spec.js` (56) is kept but not run while API 2 is on hold |
 | `k6/` | k6 | Smoke, load, stress, spike and fixed-rate (`rate.js`, 1 lakh/min) performance tests; API 1 (API 2 modes refused while on hold) |
 | `security/` | bandit, pip-audit, OWASP ZAP | Static analysis, dependency CVEs, active API scan |
-| `../tests/` | pytest | 119 unit tests (no server needed): parsing rules, report loading, response shape, middleware, Postman and Swagger coverage, Redis cache |
+| `../tests/` | pytest | 142 unit tests (plus 13 database tests, run with `TEST_DATABASE_URL`) (no server needed): parsing rules, report loading, response shape, middleware, Postman and Swagger coverage, Redis cache, loader (order, limits, reconnect) |
 
 ## Running the suites
 
@@ -189,6 +189,8 @@ Pass = no bandit issues, no known vulnerabilities, and ZAP `FAIL-NEW: 0`. Report
 
 ```bash
 uv run pytest
+# Also the database tests (bulk upsert = row-by-row upsert, loader lock), in throwaway schemas:
+TEST_DATABASE_URL=postgresql://acme:acme@localhost:5433/acme uv run pytest tests/test_load_db.py
 ```
 
 ### Postman

@@ -1,5 +1,6 @@
 """List and read source files from GCS, or from a local folder during development."""
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,10 @@ from pathlib import Path
 from app.config import get_settings
 
 SUPPORTED_EXTENSIONS = (".xlsx", ".csv")
+# (connect, read) seconds per request, and the most one download may take including the library's
+# own retries: a stalled download can't hold up the loader (or Ctrl-C) for long.
+DOWNLOAD_TIMEOUT = (10, 60)
+DOWNLOAD_RETRY_SECONDS = 120
 
 
 @dataclass
@@ -60,16 +65,37 @@ def _list_gcs(bucket_name: str, prefix: str) -> list[SourceFile]:
 
     if not bucket_name:
         raise RuntimeError("GCS_BUCKET is not set (or set LOCAL_DATA_DIR for local files)")
-    # Reading a bucket doesn't need a project, but the client insists on one; "<none>" is what the
-    # library itself uses for anonymous clients. Set GCS_PROJECT to bill or audit against a project.
-    client = storage.Client(project=get_settings().gcs_project or "<none>")
     return [
         SourceFile(
             path=blob.name,
             generation=str(blob.generation),
             updated_at=blob.updated,
-            read=blob.download_as_bytes,
+            read=lambda name=blob.name, generation=blob.generation: _download(bucket_name, name, generation),
         )
-        for blob in client.list_blobs(bucket_name, prefix=prefix)
+        for blob in _gcs_client().list_blobs(bucket_name, prefix=prefix)
         if blob.name.lower().endswith(SUPPORTED_EXTENSIONS)
     ]
+
+
+_clients = threading.local()
+
+
+def _gcs_client():
+    """One client per thread: the loader downloads several files at once, and the Google client
+    is not documented as safe to share between threads."""
+    from google.cloud import storage
+
+    if not hasattr(_clients, "client"):
+        # Reading a bucket doesn't need a project, but the client insists on one; "<none>" is what the
+        # library itself uses for anonymous clients. Set GCS_PROJECT to bill or audit against a project.
+        _clients.client = storage.Client(project=get_settings().gcs_project or "<none>")
+    return _clients.client
+
+
+def _download(bucket_name: str, name: str, generation: int) -> bytes:
+    # Pinned to the generation that was listed, so the bytes always match the recorded generation
+    # even if the file is re-uploaded meanwhile (the next run then loads the new one).
+    from google.cloud.storage.retry import DEFAULT_RETRY
+
+    blob = _gcs_client().bucket(bucket_name).blob(name, generation=generation)
+    return blob.download_as_bytes(timeout=DOWNLOAD_TIMEOUT, retry=DEFAULT_RETRY.with_timeout(DOWNLOAD_RETRY_SECONDS))

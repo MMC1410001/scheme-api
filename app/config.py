@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     local_data_dir: str | None = None
 
     scheme_header_rows: int = 1
+    # Files the loader downloads and parses ahead, in parallel, while it saves the current one.
+    loader_workers: int = 4
     report_header_rows: int = 2
     report_dealer_column: str = "customer"
 

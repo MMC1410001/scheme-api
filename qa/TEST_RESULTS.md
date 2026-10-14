@@ -16,7 +16,8 @@ Latest run, 2026-10-15 (API 2 on hold, Redis response cache added):
 
 | Suite | Total | Passed | Failed | Skipped |
 |---|---|---|---|---|
-| Unit tests (pytest) | 119 | 119 | 0 | 0 |
+| Unit tests (pytest) | 142 | 142 | 0 | 0 |
+| Database tests (`tests/test_load_db.py`, local Postgres) | 13 | 13 | 0 | 0 |
 | Postman — API 1 collection (27 requests) — assertions | 115 | 115 | 0 | 0 |
 | Playwright — API 1 (`api1_current_month.spec.js`) | 65 | 65 | 0 | 0 |
 | Playwright — Common (`common.spec.js`, incl. COMMON_TC_5: API 2 returns 404) | 5 | 4 | 0 | 1 |
@@ -87,6 +88,24 @@ Observations:
 | OWASP ZAP API scan | 119 PASS · 0 FAIL · 0 WARN. 248 attack payloads sent to the two endpoints with a valid key; all rejected with 422, no 5xx. |
 
 ## Issues found and resolved during this run
+
+### RESOLVED — Loading a month took hours over the VPN (Medium)
+- **Found by:** loading September into the shared database: about 30 s per file (10 s download,
+  15–20 s saving ~5,500 rows one statement at a time), so ~4–5 hours for 533 files.
+- **Fix:** the next 4 files are downloaded and parsed in parallel while one is saved; each file is
+  saved with one `COPY` into a temporary table and one upsert; one run at a time (advisory lock);
+  `--limit` for test runs.
+- **Verified:** real September files into a throwaway local schema: 8 files in 48 s (~6 s per file,
+  download-bound at ~3 MB/s), saving 0.3–0.5 s per file. A randomized database test shows the bulk
+  upsert gives exactly the row-by-row result. A four-lens review (SQL, concurrency, behaviour, tests)
+  found 15 smaller issues (e.g. `--limit` across reconnects, negative `--limit`, staging table on
+  non-autocommit connections, slow Ctrl-C, untested GCS code); all fixed and covered by tests.
+  A second pass (re-check of every finding, plus 16 deliberate code breaks) confirmed the fixes,
+  caught 15 of 16 breaks, and found one more real problem: after a network drop the old session
+  could keep the loader lock, so the reconnect would stop as if another run were active. Fixed: each
+  run names its sessions and, on reconnect, ends its own stale session; failing that, the run exits
+  with an error instead of a silent success. All breaks are now caught.
+- **Not measured:** save time over the VPN into the shared database (writing there was not run).
 
 ### RESOLVED — API 2 loader could not handle the real report (High)
 - **Found by:** loading the real report sample (about 100 MB, 30 million cells).
