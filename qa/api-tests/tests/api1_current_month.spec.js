@@ -1,22 +1,33 @@
 // API 1 — POST /v1/schemes/current-month: the dealer's rows for the 8 template components in the
 // requested month. Body: {"dealer_code": ..., "month": 1-12, "year": 2000-2100}.
-// Settings (API_BASE_URL, API_KEY, DEALER_CODE, SAMPLE_DATA, MONTH, YEAR, ...) are described in helpers.js.
+// Settings (API_BASE_URL, CLIENT_ID, CLIENT_SECRET, DEALER_CODE, SAMPLE_DATA, MONTH, YEAR, ...) are described in helpers.js.
+const crypto = require('crypto');
 const {
-  test, expect, SAMPLE_DATA, DEALER, NEGATIVE_DEALER, UNKNOWN_DEALER, API1, MONTH, useClient,
-  expectValidationError, registerRequestContract,
+  test, expect, AUTH_ENABLED, CLIENT_ID, CLIENT_SECRET, JWT_SECRET, SAMPLE_DATA, DEALER, NEGATIVE_DEALER,
+  UNKNOWN_DEALER, API1, MONTH, withHeaders, getToken, tokenClaims, signJwt, useClient, expectValidationError,
+  expectUnauthorized, registerRequestContract,
 } = require('./helpers');
 
 const FIELDS = ['Customer', 'FromDate', 'ToDate', 'ComponentDescription', 'Qualification', 'GsrB',
-  'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct'];
-const AMOUNTS = ['Qualification', 'GsrB', 'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct'];
+  'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct', 'NextSlabRate'];
+const AMOUNTS = ['Qualification', 'GsrB', 'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct', 'NextSlabRate'];
 const COMPONENTS = ['EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'LUXURY', 'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH'];
 const MONTH_PREFIX = `${MONTH.year}-${String(MONTH.month).padStart(2, '0')}`;
+const MONTH_END = `${MONTH_PREFIX}-${String(new Date(Date.UTC(MONTH.year, MONTH.month, 0)).getUTCDate()).padStart(2, '0')}`;
 
 test.describe('API 1 - Monthly schemes', () => {
   const client = useClient();
   // Every call sends the test month unless the body overrides it.
   const api1 = (body) => client().post(API1, { data: { ...MONTH, ...body } });
-  const rowsFor = async (dealer) => (await api1({ dealer_code: dealer })).json();
+  // Asserts 200 and an array first, so a server error (e.g. 503) fails here instead of two equal
+  // error bodies passing a "same result as" comparison.
+  const rowsFor = async (dealer) => {
+    const response = await api1({ dealer_code: dealer });
+    expect(response.status(), `dealer_code ${JSON.stringify(dealer)}`).toBe(200);
+    const rows = await response.json();
+    expect(Array.isArray(rows)).toBe(true);
+    return rows;
+  };
 
   // ===========================================================================
   // FUNCTIONAL — API1_TC_1 to API1_TC_11 (valid requests, expecting 200)
@@ -30,7 +41,7 @@ test.describe('API 1 - Monthly schemes', () => {
       expect(rows.length).toBeGreaterThan(0);
     });
 
-    test('API1_TC_2 Rows have exactly the 10 template fields', async () => {
+    test('API1_TC_2 Rows have exactly the 11 fields (template + NextSlabRate)', async () => {
       for (const row of await rowsFor(DEALER)) expect(Object.keys(row).sort()).toEqual([...FIELDS].sort());
     });
 
@@ -109,9 +120,11 @@ test.describe('API 1 - Monthly schemes', () => {
       expect(new Set(names).size).toBe(names.length);
     });
 
-    test('API1_TC_15 All rows belong to the requested month', async () => {
+    test('API1_TC_15 Every row is valid in the requested month (validity period overlaps it)', async () => {
+      // A row belongs to the months its FromDate..ToDate overlaps, not to the GCS folder it came from
+      // (the September folder also holds late SAP updates of August schemes).
       for (const row of await rowsFor(DEALER)) {
-        expect(row.ToDate.startsWith(MONTH_PREFIX) || row.FromDate.startsWith(MONTH_PREFIX)).toBe(true);
+        expect(row.FromDate <= MONTH_END && row.ToDate >= `${MONTH_PREFIX}-01`, `${row.ComponentDescription} ${row.FromDate}..${row.ToDate}`).toBe(true);
       }
     });
 
@@ -124,7 +137,7 @@ test.describe('API 1 - Monthly schemes', () => {
     test('API1_TC_17 [sample data] Latest SAP update wins (day-2 LUXURY values replace, not add)', async () => {
       test.skip(!SAMPLE_DATA, 'needs scripts/make_sample_data.py data');
       const luxury = (await rowsFor('6100000001')).find((r) => r.ComponentDescription === 'LUXURY');
-      expect(luxury).toMatchObject({ Qualification: 315.1, GsrB: 159292.8, ClearCut: 1592.93, ShortfallPct: 21.23 });
+      expect(luxury).toMatchObject({ Qualification: 315.1, GsrB: 159292.8, ClearCut: 1592.93, ShortfallPct: 21.23, NextSlabRate: 1.5 });
     });
 
     test('API1_TC_18 [sample data] SAP trailing-minus numbers come back negative', async () => {
@@ -186,4 +199,166 @@ test.describe('API 1 - Monthly schemes', () => {
   // EDGE, NEGATIVE, SECURITY — API1_TC_26 onwards (see helpers.js)
   // ===========================================================================
   registerRequestContract({ prefix: 'API1', path: API1, start: 26, baseBody: MONTH });
+
+  // ===========================================================================
+  // MONTH AND YEAR FORMAT — API1_TC_66 to API1_TC_68 (raw JSON, so 09 can be sent unquoted;
+  // sent as a Buffer because Playwright re-encodes a string body that isn't valid JSON)
+  // Month: 1-12 as one or two digits (9, 09, "9", "09"). Year: four digits, 2000-2100.
+  // ===========================================================================
+  test.describe('Month and year format', () => {
+    const raw = (month, year) => client().post(API1, {
+      headers: { 'Content-Type': 'application/json' },
+      data: Buffer.from(`{"dealer_code": ${JSON.stringify(DEALER)}, "month": ${month}, "year": ${year}}`),
+    });
+    const padded = String(MONTH.month).padStart(2, '0');
+
+    test('API1_TC_66 Month as one or two digits (9, 09, "9", "09") returns the same rows', async () => {
+      const expected = await rowsFor(DEALER);
+      for (const month of [MONTH.month, padded, `"${MONTH.month}"`, `"${padded}"`]) {
+        const response = await raw(month, MONTH.year);
+        expect(response.status(), `month ${month}`).toBe(200);
+        expect(await response.json(), `month ${month}`).toEqual(expected);
+      }
+    });
+
+    test('API1_TC_67 Month with a sign, decimal, exponent, spaces, 0 or 3 digits returns 422 @negative', async () => {
+      for (const month of ['-9', '-09', '"-9"', '"+9"', '9.0', '"9.0"', '09.5', '1e1', '0', '00', '"0"', '009', '"009"', '"010"', '" 9 "']) {
+        const response = await raw(month, MONTH.year);
+        expect(response.status(), `month ${month}`).toBe(422);
+        await expectValidationError(response);
+      }
+    });
+
+    test('API1_TC_68 Year that is not four digits, or has a sign, decimal or spaces returns 422 @negative', async () => {
+      for (const year of ['02026', '"02026"', '26', '"26"', '-2026', '"+2026"', '2026.0', '"2026.0"', '2.026e3', '" 2026 "']) {
+        const response = await raw(MONTH.month, year);
+        expect(response.status(), `year ${year}`).toBe(422);
+        await expectValidationError(response);
+      }
+    });
+  });
+
+  // ===========================================================================
+  // RATE LIMIT — API1_TC_69_SEC. The server allows RATE_LIMIT_PER_SECOND requests per IP per second
+  // (default 2,500). Runs only when RATE_LIMIT is set to the server's value; start a test server
+  // with a low one, e.g. RATE_LIMIT_PER_SECOND=20, and run with RATE_LIMIT=20.
+  // ===========================================================================
+  test.describe('Rate limit @security', () => {
+    const LIMIT = Number(process.env.RATE_LIMIT || 0);
+
+    test('API1_TC_69_SEC More than the per-IP limit in one second gets 429 with Retry-After, then recovers', async () => {
+      test.skip(!LIMIT, 'set RATE_LIMIT to the server\'s RATE_LIMIT_PER_SECOND');
+      const responses = await Promise.all(Array.from({ length: LIMIT * 3 }, () => api1({ dealer_code: DEALER })));
+      const statuses = responses.map((r) => r.status());
+      expect(statuses.filter((s) => s >= 500)).toEqual([]);
+      const refused = responses.filter((r) => r.status() === 429);
+      expect(refused.length).toBeGreaterThan(0);
+      for (const response of refused) {
+        expect(response.headers()['retry-after']).toBe('1');
+        expect(response.headers()['x-content-type-options']).toBe('nosniff');
+        expect(await response.json()).toEqual({ detail: 'Too many requests' });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect((await api1({ dealer_code: DEALER })).status()).toBe(200);
+    });
+  });
+
+  // ===========================================================================
+  // BEARER TOKENS — API1_TC_70_SEC onwards (the request-contract cases API1_TC_43-47_SEC cover a
+  // missing, garbage or tampered token, a token in the query string and X-API-Key). Tokens the
+  // server never issued must get 401 (403 only for a missing scope), never 200 or 500.
+  // TC_74-76 forge tokens with the server's key (JWT_SECRET; the .env.example key on localhost).
+  // ===========================================================================
+  test.describe('Bearer tokens @security', () => {
+    test.beforeEach(() => test.skip(!AUTH_ENABLED, 'server does not require a token (AUTH_ENABLED != true)'));
+    const body = { dealer_code: DEALER, ...MONTH };
+    const callWith = async (playwright, authorization, check) =>
+      withHeaders(playwright, { Authorization: authorization }, async (ctx) => check(await ctx.post(API1, { data: body })));
+    const needsKey = () => test.skip(!JWT_SECRET, 'set JWT_SECRET to the server\'s key to forge tokens');
+
+    // A key with non-ASCII characters used to crash the old X-API-Key comparison (500, no security headers).
+    test('API1_TC_70_SEC Non-ASCII Bearer token returns 401 Invalid token, never 500', async ({ playwright }) => {
+      for (const token of ['kéy', `${await getToken()}é`, 'ÿ'.repeat(14)]) {
+        await callWith(playwright, `Bearer ${token}`, (response) => expectUnauthorized(response, 'Invalid token'));
+      }
+    });
+
+    test('API1_TC_71_SEC Other schemes (Basic with the client credentials, Token, JWT) return 401', async ({ playwright }) => {
+      const token = await getToken();
+      const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+      for (const authorization of [`Basic ${basic}`, `Token ${token}`, `JWT ${token}`, token]) {
+        await callWith(playwright, authorization, (response) => expectUnauthorized(response, 'Not authenticated'));
+      }
+    });
+
+    test('API1_TC_72_SEC Unsigned token (alg "none") returns 401', async ({ playwright }) => {
+      for (const alg of ['none', 'None', 'NONE']) {
+        const unsigned = signJwt(tokenClaims(), '', { alg, typ: 'JWT' }).replace(/\.[^.]*$/, '.'); // empty signature
+        await callWith(playwright, `Bearer ${unsigned}`,
+          (response) => expectUnauthorized(response, 'Invalid token'));
+      }
+    });
+
+    test('API1_TC_73_SEC Token signed with another key or algorithm returns 401', async ({ playwright }) => {
+      const claims = tokenClaims();
+      const tokens = [signJwt(claims, 'an-attacker-key-that-is-at-least-32-chars'), signJwt(claims, '')];
+      const rs = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
+      const unsigned = `${Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
+      tokens.push(`${unsigned}.${crypto.sign('sha256', Buffer.from(unsigned), rs).toString('base64url')}`);
+      for (const token of tokens) {
+        await callWith(playwright, `Bearer ${token}`, (response) => expectUnauthorized(response, 'Invalid token'));
+      }
+    });
+
+    test('API1_TC_74_SEC Expired token returns 401 Token expired with error="invalid_token"', async ({ playwright }) => {
+      needsKey();
+      const now = Math.floor(Date.now() / 1000);
+      const token = signJwt(tokenClaims({ iat: now - 7200, nbf: now - 7200, exp: now - 120 }), JWT_SECRET);
+      await callWith(playwright, `Bearer ${token}`, async (response) => {
+        await expectUnauthorized(response, 'Token expired');
+        expect(response.headers()['www-authenticate']).toContain('error_description="Token expired"');
+      });
+    });
+
+    test('API1_TC_75_SEC Token without the schemes:read scope returns 403 Insufficient scope', async ({ playwright }) => {
+      needsKey();
+      for (const scope of ['', 'schemes:write', 'admin', undefined]) {
+        await callWith(playwright, `Bearer ${signJwt(tokenClaims({ scope }), JWT_SECRET)}`, async (response) => {
+          expect(response.status(), String(scope)).toBe(403);
+          expect(await response.json()).toEqual({ detail: 'Insufficient scope' });
+          expect(response.headers()['www-authenticate']).toContain('error="insufficient_scope"');
+        });
+      }
+    });
+
+    test('API1_TC_76_SEC Correctly signed token with a wrong claim returns 401 Invalid token', async ({ playwright }) => {
+      needsKey();
+      const now = Math.floor(Date.now() / 1000);
+      const cases = {
+        'unknown client (revoked)': { sub: 'not-a-registered-client' },
+        'wrong audience': { aud: 'another-api' },
+        'wrong issuer': { iss: 'https://evil.example.com' },
+        'not valid yet': { nbf: now + 600, iat: now + 600 },
+        'no exp': { exp: undefined },
+        'no jti': { jti: undefined },
+        'no sub': { sub: undefined },
+      };
+      for (const [name, overrides] of Object.entries(cases)) {
+        await callWith(playwright, `Bearer ${signJwt(tokenClaims(overrides), JWT_SECRET)}`, async (response) => {
+          expect(response.status(), name).toBe(401);
+          await expectUnauthorized(response, 'Invalid token');
+        });
+      }
+    });
+
+    test('API1_TC_77 Valid token works with any case of "Bearer" and is reusable', async ({ playwright }) => {
+      const token = await getToken();
+      for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+        await callWith(playwright, `${scheme} ${token}`, async (response) => {
+          expect(response.status(), scheme).toBe(200);
+          expect(await response.json()).toBeInstanceOf(Array);
+        });
+      }
+    });
+  });
 });

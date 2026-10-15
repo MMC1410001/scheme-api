@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Response
+from fastapi import APIRouter, Body, Depends, Response, Security
 from pydantic import TypeAdapter
 
 from app.cache import ResponseCache, get_cache
@@ -9,7 +9,7 @@ from app.normalize import normalize_dealer_code
 from app.openapi_examples import API1_REQUESTS, API1_ROWS, ERRORS, ok
 from app.repository import Repository, get_repository
 from app.schemas import SchemeMonthRequest, SchemeRow
-from app.security import require_api_key
+from app.security import SCOPE, require_token
 
 # API 1 rows go through the response model (PascalCase keys, numbers as floats), like FastAPI does.
 SCHEME_ROWS = TypeAdapter(list[SchemeRow])
@@ -22,7 +22,7 @@ def _json_response(cache: ResponseCache, key: str, build: Callable[[], bytes]) -
 
 
 router = APIRouter(
-    prefix="/v1/schemes", tags=["schemes"], dependencies=[Depends(require_api_key)], responses=ERRORS
+    prefix="/v1/schemes", tags=["schemes"], dependencies=[Security(require_token, scopes=[SCOPE])], responses=ERRORS
 )
 
 
@@ -40,8 +40,8 @@ def month_schemes(
     """The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given
     month and year, ordered by end date (the API template's order).
 
-    A row's month is the GCS month folder its SAP file came from. Returns an empty list when the
-    dealer has no data for that month.
+    A row belongs to every month its validity period overlaps (rows without dates: the GCS month
+    folder its file came from). Returns an empty list when the dealer has no data for that month.
     """
     dealer_code = normalize_dealer_code(body.dealer_code)
 

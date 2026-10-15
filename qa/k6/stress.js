@@ -2,7 +2,7 @@
 // Thresholds are reported but do not abort the run, so you see the whole curve.
 //   k6 run stress.js
 //   MAX_VUS=1000 k6 run stress.js
-import { thresholds, summaryTrendStats, summaryTo } from './config.js';
+import { thresholds, summaryTrendStats, summaryTo, authSetup } from './config.js';
 import { userIteration } from './traffic.js';
 
 const MAX = parseInt(__ENV.MAX_VUS || '600');
@@ -29,4 +29,5 @@ export const options = {
 };
 
 export default userIteration;
+export const setup = authSetup; // one token for the whole run
 export const handleSummary = summaryTo('stress');

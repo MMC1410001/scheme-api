@@ -11,6 +11,7 @@ dependencies = [
     "openpyxl>=3.1",
     "google-cloud-storage>=2.18",
     "redis>=5",
+    "pyjwt>=2.9",
 ]
 
 [dependency-groups]

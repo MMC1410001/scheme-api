@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import Settings, get_settings
 from app.main import app
+from app.middleware import SECURITY_HEADERS
 from app.repository import get_repository
 from tests.test_api import FakeRepository
 
@@ -85,6 +87,22 @@ def test_unexpected_errors_return_a_generic_500(client):
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error"}
     assert "10.0.0.5" not in response.text
+    for name, value in SECURITY_HEADERS.items():
+        assert response.headers[name] == value, name
+
+
+@pytest.mark.parametrize("value", ["k\xe9y", "\xff" * 14, "eyJ\xe9.x.y"])
+def test_non_ascii_credentials_return_401_not_500(client, value):
+    from tests.test_auth import SETTINGS
+
+    app.dependency_overrides[get_settings] = lambda: SETTINGS
+    bearer = client.post(URL, json={"dealer_code": "1", **MONTH}, headers={"Authorization": f"Bearer {value}".encode("latin-1")})
+    assert bearer.status_code == 401
+    assert bearer.json() == {"detail": "Invalid token"}
+    basic = client.post("/v1/auth/token", data={"grant_type": "client_credentials"},
+                        headers={"Authorization": f"Basic {value}".encode("latin-1")})
+    assert basic.status_code == 401
+    assert basic.json()["error"] == "invalid_client"
 
 
 def test_database_busy_returns_503_with_retry_after(client):

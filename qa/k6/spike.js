@@ -2,7 +2,7 @@
 // Checks that the API survives and recovers without errors.
 //   k6 run spike.js
 //   SPIKE_VUS=1000 k6 run spike.js
-import { thresholds, summaryTrendStats, summaryTo } from './config.js';
+import { thresholds, summaryTrendStats, summaryTo, authSetup } from './config.js';
 import { userIteration } from './traffic.js';
 
 const BASE = parseInt(__ENV.BASE_VUS || '20');
@@ -29,4 +29,5 @@ export const options = {
 };
 
 export default userIteration;
+export const setup = authSetup; // one token for the whole run
 export const handleSummary = summaryTo('spike');

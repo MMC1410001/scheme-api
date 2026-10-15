@@ -4,7 +4,9 @@
 #   qa/security/run_scans.sh            # all three scans (API must be running for ZAP)
 #   qa/security/run_scans.sh sast deps  # just some of them
 #
-# Env: BASE_URL (default http://localhost:8000), API_KEY (sent as X-API-Key to ZAP).
+# Env: BASE_URL (default http://localhost:8000); CLIENT_ID + CLIENT_SECRET: a token is fetched once
+# from /v1/auth/token and ZAP sends "Authorization: Bearer <token>" on every request. Without them
+# (or when the server has auth off) ZAP scans unauthenticated. A token lasts 1 hour, longer than a scan.
 #
 #   sast  bandit     — Python static analysis of app/ and ingestion/
 #   deps  pip-audit  — known CVEs in the locked dependencies
@@ -14,7 +16,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPORTS="$ROOT/qa/security/reports"
 BASE_URL="${BASE_URL:-http://localhost:8000}"
-API_KEY="${API_KEY:-}"
+CLIENT_ID="${CLIENT_ID:-}"
+CLIENT_SECRET="${CLIENT_SECRET:-}"
 SCANS=("${@:-sast deps zap}")
 SCANS=(${SCANS[*]})
 status=0
@@ -40,11 +43,23 @@ run_zap() {
   # Inside the container, "localhost" is the container itself.
   local target="${BASE_URL/localhost/host.docker.internal}"
   target="${target/127.0.0.1/host.docker.internal}"
-  local auth=()
-  if [[ -n "$API_KEY" ]]; then
-    auth=(-z "-config replacer.full_list(0).description=apikey -config replacer.full_list(0).enabled=true \
--config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=X-API-Key \
--config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$API_KEY")
+  local auth=() token=""
+  if [[ -n "$CLIENT_ID" && -n "$CLIENT_SECRET" ]]; then
+    # One token for the whole scan (the token endpoint allows only ~30 requests a minute per IP).
+    local response
+    response=$(curl -sS -X POST "$BASE_URL/v1/auth/token" \
+      --data-urlencode grant_type=client_credentials --data-urlencode "client_id=$CLIENT_ID" \
+      --data-urlencode "client_secret=$CLIENT_SECRET" --data-urlencode scope=schemes:read) || response=""
+    token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' 2>/dev/null)
+    if [[ -z "$token" ]]; then
+      echo "ZAP: could not get a token from $BASE_URL/v1/auth/token: ${response:-no response}" >&2
+      return 1
+    fi
+    auth=(-z "-config replacer.full_list(0).description=bearer -config replacer.full_list(0).enabled=true \
+-config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Authorization \
+-config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=Bearer\ $token")
+  else
+    echo "ZAP: CLIENT_ID/CLIENT_SECRET not set, scanning without a token (only useful when the server has auth off)"
   fi
   docker run --rm -v "$REPORTS:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
     zap-api-scan.py -t "$target/openapi.json" -f openapi \

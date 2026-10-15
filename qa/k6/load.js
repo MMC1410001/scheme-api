@@ -2,7 +2,7 @@
 // API dev tests), holds for HOLD (default 3m), ramps down.
 //   k6 run load.js
 //   TARGET_VUS=300 HOLD=10m k6 run load.js
-import { thresholds, summaryTrendStats, summaryTo } from './config.js';
+import { thresholds, summaryTrendStats, summaryTo, authSetup } from './config.js';
 import { userIteration } from './traffic.js';
 
 const TARGET = parseInt(__ENV.TARGET_VUS || '150');
@@ -25,4 +25,5 @@ export const options = {
 };
 
 export default userIteration;
+export const setup = authSetup; // one token for the whole run
 export const handleSummary = summaryTo('load');

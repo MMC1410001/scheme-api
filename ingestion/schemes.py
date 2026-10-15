@@ -22,6 +22,7 @@ COLUMNS = {
     "clear_cut": "clear_cut_cn",
     "shortfall_amount": "short_fall",
     "shortfall_pct": "short_fall_pct",
+    "next_slab_rate": "next_slab_rate",
     "last_updated_date": "last_updated_date",
     "last_updated_time": "last_updated_time",
 }
@@ -75,6 +76,7 @@ def to_record(row: dict[str, Any], year: int, month: int, source_file: str) -> d
         "clear_cut": parse_number(col("clear_cut")),
         "shortfall_amount": parse_number(col("shortfall_amount")),
         "shortfall_pct": parse_number(col("shortfall_pct")),
+        "next_slab_rate": parse_number(col("next_slab_rate")),
         "last_updated_at": parse_last_updated(col("last_updated_date"), col("last_updated_time")),
         "source_file": source_file,
         "raw": to_jsonable(row),

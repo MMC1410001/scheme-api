@@ -1,17 +1,28 @@
-// Shared settings for every k6 script. Nothing secret lives here: pass the key via API_KEY.
+// Shared settings for every k6 script. Nothing secret lives here: pass credentials via env.
 //
 //   BASE_URL       default http://localhost:8000
-//   API_KEY        sent as X-API-Key
+//   CLIENT_ID      OAuth2 client credentials. setup() exchanges them ONCE at POST /v1/auth/token
+//   CLIENT_SECRET  and every VU sends that Bearer token (the token endpoint allows only
+//                  TOKEN_RATE_LIMIT_PER_MINUTE requests per IP, default 30). Default
+//                  local-client / local-test-secret on localhost only; empty = no token (auth off).
+//                  A token lasts JWT_TTL_SECONDS (1 h): keep runs shorter than that.
 //   DEALER_PREFIX  dealer codes are <prefix><8-digit n>; default "62" = perf data from
 //                  `scripts/make_sample_data.py --perf-dealers N`
 //   DEALER_COUNT   how many perf dealers exist (default 20000)
+//   DEALER_CODES   comma-separated real dealer codes; when set, used instead of the generated
+//                  <prefix><n> codes (for Dev/UAT, which don't have the perf dealers)
+//   DEALERS_FILE   "true" = use the month's codes from ../test-data/dealers.json (gitignored;
+//                  see pick_dealers.py) instead of DEALER_CODES
 //   UNKNOWN_RATE   share of requests for dealers with no data (default 0.05)
 //   MONTH, YEAR    month sent to API 1 (default: the current month in India time)
+import http from 'k6/http';
 import { check } from 'k6';
 import exec from 'k6/execution';
 
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
-const API_KEY = __ENV.API_KEY || '';
+const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(BASE_URL);
+const CLIENT_ID = __ENV.CLIENT_ID !== undefined ? __ENV.CLIENT_ID : (IS_LOCAL ? 'local-client' : '');
+const CLIENT_SECRET = __ENV.CLIENT_SECRET !== undefined ? __ENV.CLIENT_SECRET : (IS_LOCAL ? 'local-test-secret' : '');
 const DEALER_PREFIX = __ENV.DEALER_PREFIX || '62';
 const DEALER_COUNT = parseInt(__ENV.DEALER_COUNT || '20000');
 const UNKNOWN_RATE = parseFloat(__ENV.UNKNOWN_RATE || '0.05');
@@ -24,8 +35,32 @@ export const MONTH = {
   year: parseInt(__ENV.YEAR || String(nowInIndia.getUTCFullYear())),
 };
 
-export const params = (name) => ({
-  headers: { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) },
+function realDealers() {
+  if (__ENV.DEALERS_FILE !== 'true') return (__ENV.DEALER_CODES || '').split(',').map((c) => c.trim()).filter(Boolean);
+  const key = `${MONTH.year}-${String(MONTH.month).padStart(2, '0')}`;
+  const codes = (JSON.parse(open('../test-data/dealers.json')).months || {})[key] || [];
+  if (!codes.length) throw new Error(`no dealers for ${key} in qa/test-data/dealers.json`);
+  return codes;
+}
+const DEALER_CODES = realDealers();
+
+// Call from each script's setup(): one token for the whole test, handed to every VU as setup data.
+// A server with auth off refuses every client (401), so the test then runs without a token.
+export function authSetup() {
+  if (!CLIENT_ID || !CLIENT_SECRET) return { token: '' };
+  const res = http.post(`${BASE_URL}/v1/auth/token`,
+    { grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SECRET, scope: 'schemes:read' },
+    { tags: { name: 'token' } });
+  if (res.status === 200) return { token: res.json('access_token') };
+  if (res.status === 401 && __ENV.AUTH_ENABLED !== 'true') {
+    console.warn('token request refused (401): running without a token (server auth off?)');
+    return { token: '' };
+  }
+  throw new Error(`POST /v1/auth/token returned ${res.status}: ${res.body}`);
+}
+
+export const params = (name, token) => ({
+  headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   tags: { name }, // groups metrics per endpoint in the summary
   timeout: '15s',
 });
@@ -33,7 +68,9 @@ export const params = (name) => ({
 // Spread VUs over the dealer pool so the test isn't served from one hot row.
 export function pickDealer() {
   if (Math.random() < UNKNOWN_RATE) return '6199999999';
-  const n = ((exec.vu.idInTest * 7919 + exec.scenario.iterationInTest) % DEALER_COUNT) + 1;
+  const i = exec.vu.idInTest * 7919 + exec.scenario.iterationInTest;
+  if (DEALER_CODES.length) return DEALER_CODES[i % DEALER_CODES.length];
+  const n = (i % DEALER_COUNT) + 1;
   return `${DEALER_PREFIX}${String(n).padStart(8, '0')}`;
 }
 

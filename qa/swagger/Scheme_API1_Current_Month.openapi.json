@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Scheme API 1 - Monthly schemes",
-    "description": "POST {dealer_code, month, year} returns the dealer's rows for the 8 template components (EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02, EB FULL MONTH) in that month.\n\n**Try it:** pick a server, click **Authorize** and enter the X-API-Key (not needed while the server has no API_KEY set), then **Try it out** on the request and pick an example.\n\nFull guide: docs/API_GUIDE.md in the repository.",
+    "description": "POST {dealer_code, month, year} returns the dealer's rows for the 8 template components (EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02, EB FULL MONTH) in that month.\n\n**Try it:** pick a server, click **Authorize** and enter your client_id and client_secret (OAuth2 client credentials; Local: local-client / local-test-secret). Swagger gets a Bearer token from POST /v1/auth/token and sends it on every call. Then **Try it out** on the request and pick an example.\n\nFull guide: docs/API_GUIDE.md in the repository.",
     "version": "0.1.0"
   },
   "servers": [
@@ -27,7 +27,7 @@
           "schemes"
         ],
         "summary": "API 1: a dealer's scheme rows for the requested month",
-        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row's month is the GCS month folder its SAP file came from. Returns an empty list when the\ndealer has no data for that month.",
+        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Returns an empty list when the dealer has no data for that month.",
         "operationId": "month_schemes_v1_schemes_current_month_post",
         "requestBody": {
           "content": {
@@ -106,7 +106,8 @@
                         "RebateRate": 0.75,
                         "ClearCut": 0.0,
                         "ShortfallAmount": 0.0,
-                        "ShortfallPct": 0.0
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 1.0
                       },
                       {
                         "Customer": "6100000001",
@@ -118,7 +119,8 @@
                         "RebateRate": 1.0,
                         "ClearCut": 1592.93,
                         "ShortfallAmount": 84.9,
-                        "ShortfallPct": 21.23
+                        "ShortfallPct": 21.23,
+                        "NextSlabRate": 1.5
                       },
                       {
                         "Customer": "6100000001",
@@ -130,7 +132,8 @@
                         "RebateRate": 2.25,
                         "ClearCut": 0.0,
                         "ShortfallAmount": 0.0,
-                        "ShortfallPct": 0.0
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 0.0
                       }
                     ]
                   },
@@ -143,14 +146,35 @@
             }
           },
           "401": {
-            "description": "X-API-Key missing or wrong (only when the server has API_KEY set)",
+            "description": "Bearer token missing, invalid or expired (get a new one from /v1/auth/token)",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "RFC 6750 challenge",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorMessage"
                 },
                 "example": {
-                  "detail": "Invalid or missing API key"
+                  "detail": "Token expired"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the schemes:read scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Insufficient scope"
                 }
               }
             }
@@ -186,6 +210,27 @@
                       "type": "missing"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than RATE_LIMIT_PER_SECOND requests from this IP in one second; retry after Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Too many requests"
                 }
               }
             }
@@ -227,7 +272,9 @@
         },
         "security": [
           {
-            "APIKeyHeader": []
+            "OAuth2ClientCredentials": [
+              "schemes:read"
+            ]
           }
         ]
       }
@@ -272,7 +319,7 @@
           "detail"
         ],
         "title": "ErrorMessage",
-        "description": "Body of 401, 413, 500 and 503 responses."
+        "description": "Body of 401, 403, 413, 429, 500 and 503 responses."
       },
       "SchemeMonthRequest": {
         "properties": {
@@ -292,7 +339,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Month",
-            "description": "1-12",
+            "description": "1-12 (9 or 09)",
             "examples": [
               10
             ]
@@ -302,7 +349,7 @@
             "maximum": 2100.0,
             "minimum": 2000.0,
             "title": "Year",
-            "description": "Four-digit year",
+            "description": "Four-digit year, 2000-2100",
             "examples": [
               2026
             ]
@@ -315,7 +362,7 @@
           "year"
         ],
         "title": "SchemeMonthRequest",
-        "description": "API 1 body: the dealer and the month to return. Month and year may be JSON numbers or numeric strings."
+        "description": "API 1 body: the dealer and the month to return. Month is 1-12, sent as 9 or 09 (number or string); year is four digits, 2000-2100 (number or string)."
       },
       "SchemeRow": {
         "properties": {
@@ -420,6 +467,18 @@
               }
             ],
             "title": "Shortfallpct"
+          },
+          "NextSlabRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextslabrate",
+            "description": "Rebate rate of the next slab (SAP Next Slab Rate)"
           }
         },
         "type": "object",
@@ -433,7 +492,8 @@
           "RebateRate",
           "ClearCut",
           "ShortfallAmount",
-          "ShortfallPct"
+          "ShortfallPct",
+          "NextSlabRate"
         ],
         "title": "SchemeRow",
         "description": "One component row, with the columns of the API template. Keys are PascalCase, like the other dealer APIs."
@@ -502,10 +562,17 @@
       }
     },
     "securitySchemes": {
-      "APIKeyHeader": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-API-Key"
+      "OAuth2ClientCredentials": {
+        "type": "oauth2",
+        "description": "Get a token from POST /v1/auth/token with your client_id and client_secret, then send `Authorization: Bearer <token>`. Tokens last 1 hour; reuse one until it expires.",
+        "flows": {
+          "clientCredentials": {
+            "scopes": {
+              "schemes:read": "Read dealer scheme rows"
+            },
+            "tokenUrl": "/v1/auth/token"
+          }
+        }
       }
     }
   }

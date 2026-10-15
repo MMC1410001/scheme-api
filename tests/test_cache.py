@@ -175,5 +175,5 @@ class _Closing:
 def test_cached_value_is_the_json_body(client, repo, response_cache, fake_redis):
     api1(client)
     (key,) = [k for k in fake_redis.data if k != VERSION_KEY]
-    assert key == "acme:v1:0:api1:6100009999:2026:9"
+    assert key == "acme:v2:0:api1:6100009999:2026:9"
     assert json.loads(fake_redis.data[key])[0]["ComponentDescription"] == "LUXURY"

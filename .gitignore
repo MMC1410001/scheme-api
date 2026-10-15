@@ -7,12 +7,19 @@ __pycache__/
 .env.*
 !.env.example
 local_data/
+# DevOps owns the Docker setup; a local docker-compose.yml (dev DB/Redis) stays out of the repo.
+docker-compose.yml
+compose.yml
+Dockerfile
+.dockerignore
 *.json.key
 service-account*.json
 data/
 .DS_Store
 
 # QA outputs
+# Real dealer codes for QA (client data): built by qa/test-data/pick_dealers.py, never committed.
+qa/test-data/dealers.json
 qa/api-tests/node_modules/
 qa/api-tests/test-results/
 qa/api-tests/playwright-report/

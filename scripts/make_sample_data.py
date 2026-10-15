@@ -20,7 +20,7 @@ last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 HEADER = [
     "Client", "Agreement", "Customer", "Valid from", "To", "Deal Suffix", "Comp desc",
     "GSR (Q)", "Invoiced Quantity(Q)", "GSR (B)", "Rebate Rate", "Clear Cut CN",
-    "Short Fall", "Short Fall %", "Last Updated Date", "Last Updated Time",
+    "Short Fall", "Short Fall %", "Next Slab Rate", "Last Updated Date", "Last Updated Time",
 ]
 
 
@@ -28,10 +28,10 @@ def d(day: date) -> str:
     return day.strftime("%d/%m/%Y")
 
 
-def row(customer, suffix, comp, to, gsr_q, qty, gsr_b, rate, clear_cut, short, short_pct, updated):
+def row(customer, suffix, comp, to, gsr_q, qty, gsr_b, rate, clear_cut, short, short_pct, updated, next_rate="0.00"):
     return [
         "100", f"02{customer[-8:]}", customer, d(first), d(to), suffix, comp, gsr_q, qty, gsr_b,
-        rate, clear_cut, short, short_pct, d(updated), "10:20:56",
+        rate, clear_cut, short, short_pct, next_rate, d(updated), "10:20:56",
     ]
 
 
@@ -40,18 +40,18 @@ day1, day2 = first, first + timedelta(days=1)
 DAY1 = []
 for customer, gsr in (("6100000001", "405232.86 "), ("6100000002", "882.00-")):  # SAP writes negatives as "882.00-"
     DAY1 += [
-        row(customer, "03", "EB SLAB 1", slab_end[1], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1),
-        row(customer, "04", "EB SLAB 2", slab_end[2], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1),
-        row(customer, "05", "EB SLAB 3", slab_end[3], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1),
+        row(customer, "03", "EB SLAB 1", slab_end[1], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1, "1.00"),
+        row(customer, "04", "EB SLAB 2", slab_end[2], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1, "1.00"),
+        row(customer, "05", "EB SLAB 3", slab_end[3], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1, "1.25"),
         row(customer, "09", "VALUE", last, gsr, "0.000", gsr, "0.00", "0.00", "0.00", "0.00", day1),
-        row(customer, "06", "LUXURY", last, "100.00", "200.000", "90000.00", "1.00", "900.00", "200.00", "50.00", day1),
+        row(customer, "06", "LUXURY", last, "100.00", "200.000", "90000.00", "1.00", "900.00", "200.00", "50.00", day1, "1.25"),
         row(customer, "07", "PREMIUM 01", last, "0.00", "0.000", "0.00", "0.00", "0.00", "40.00", "100.00", day1),
         row(customer, "08", "PREMIUM 02", last, "0.00", "0.000", "0.00", "0.00", "0.00", "8.00", "100.00", day1),
         row(customer, "5!", "EB FULL MONTH", last, "0.00", "0.000", gsr, "2.25", "0.00", "0.00", "0.00", day1),
         row(customer, "65", "ALWD EB2", last, gsr, "0.000", gsr, "1.00", "0.00", "0.00", "0.00", day1),  # dropped
     ]
 DAY2 = [
-    row("6100000001", "06", "LUXURY", last, "315.10", "315.100", "159292.80", "1.00", "1592.93", "84.90", "21.23", day2),
+    row("6100000001", "06", "LUXURY", last, "315.10", "315.100", "159292.80", "1.00", "1592.93", "84.90", "21.23", day2, "1.50"),
 ]
 
 

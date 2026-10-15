@@ -19,6 +19,7 @@ SCHEME_ROW = {
     "clear_cut": Decimal("1200.01"),
     "shortfall_amount": Decimal("49.5"),
     "shortfall_pct": Decimal("16.5"),
+    "next_slab_rate": Decimal("1.25"),
 }
 
 
@@ -64,6 +65,7 @@ def test_api1_returns_template_columns_for_the_requested_month(client, repo):
             "ClearCut": 1200.01,
             "ShortfallAmount": 49.5,
             "ShortfallPct": 16.5,
+            "NextSlabRate": 1.25,
         }
     ]
 
@@ -99,9 +101,62 @@ def test_invalid_month_or_year_returns_422(client, repo, change):
     assert repo.calls == []
 
 
-def test_api_key_is_enforced_when_configured(client, repo):
-    app.dependency_overrides[get_settings] = lambda: Settings(api_key="secret")
+def test_bearer_token_is_enforced_when_configured(client, repo):
+    from tests.test_auth import SETTINGS, bearer
 
+    app.dependency_overrides[get_settings] = lambda: SETTINGS
     assert client.post("/v1/schemes/current-month", json={"dealer_code": "1001", **MONTH}).status_code == 401
-    ok = client.post("/v1/schemes/current-month", json={"dealer_code": "1001", **MONTH}, headers={"X-API-Key": "secret"})
+    ok = client.post("/v1/schemes/current-month", json={"dealer_code": "1001", **MONTH}, headers=bearer())
     assert ok.status_code == 200
+
+
+@pytest.mark.parametrize("month, expected", [
+    ("9", 9), ("09", 9), ('"9"', 9), ('"09"', 9), ("01", 1), ("10", 10), ("12", 12), ('"12"', 12),
+])
+def test_month_as_one_or_two_digits_is_accepted(client, repo, month, expected):
+    raw = '{"dealer_code": "1001", "month": %s, "year": 2026}' % month
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert repo.calls == [("1001", 2026, expected)]
+
+
+@pytest.mark.parametrize("month", [
+    "009", '"009"', '"010"',                       # more than two digits
+    "-9", "-09", '"-9"', '"+9"',                   # signs
+    "9.0", '"9.0"', "09.5", "1e1",                 # decimals and exponents
+    "0", "00", '"0"', '"00"', "13", '"13"',        # outside 1-12
+    '" 9 "',
+])
+def test_month_other_than_1_to_12_in_one_or_two_digits_returns_422(client, repo, month):
+    raw = '{"dealer_code": "1001", "month": %s, "year": 2026}' % month
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert repo.calls == []
+
+
+def test_padding_does_not_rescue_otherwise_bad_bodies(client, repo):
+    raw = '{"dealer_code": "1001", "month": 09, "year": 2026'
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert repo.calls == []
+
+
+@pytest.mark.parametrize("year", ["2026", '"2026"', "2000", "2100"])
+def test_year_as_four_digits_is_accepted(client, repo, year):
+    raw = '{"dealer_code": "1001", "month": 9, "year": %s}' % year
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert repo.calls == [("1001", int(year.strip('"')), 9)]
+
+
+@pytest.mark.parametrize("year", [
+    "02026", '"02026"', '"26"', "26",              # not four digits
+    "-2026", '"-2026"', '"+2026"',                 # signs
+    "2026.0", '"2026.0"', "2.026e3",               # decimals and exponents
+    '" 2026 "', "1999", "2101", '"2101"', "true",
+])
+def test_year_other_than_four_digits_2000_to_2100_returns_422(client, repo, year):
+    raw = '{"dealer_code": "1001", "month": 9, "year": %s}' % year
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert repo.calls == []

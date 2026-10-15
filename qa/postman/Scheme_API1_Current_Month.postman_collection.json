@@ -2,23 +2,16 @@
   "info": {
     "_postman_id": "48c00caa-634f-5ed5-80a0-75316dc4c11e",
     "name": "Scheme API 1 - Monthly schemes",
-    "description": "API 1: POST /v1/schemes/current-month with {dealer_code, month, year} returns the dealer's rows for the 8 template components in that month. month/year default to the current month (India time); set `month` and `year` in the environment to test another month.\n\n1. Import this collection and an environment (Local or Dev) from the same folder.\n2. Pick the environment, set `apiKey` if the server requires one.\n3. Run a request, or run the whole collection (Runner) to execute every test.\n\nFull guide: qa/README.md and docs/API_GUIDE.md in the repository.",
+    "description": "API 1: POST /v1/schemes/current-month with {dealer_code, month, year} returns the dealer's rows for the 8 template components in that month. month/year default to the current month (India time); set `month` and `year` in the environment to test another month.\n\n1. Import this collection and an environment (Local or Dev) from the same folder.\n2. Pick the environment and set `clientId` and `clientSecret` (Local has the .env.example values). The collection fetches one Bearer token from /v1/auth/token and reuses it until a minute before it expires; set `authEnabled = false` for a server without auth.\n3. Run a request, or run the whole collection (Runner) to execute every test.\n\nFull guide: qa/README.md and docs/API_GUIDE.md in the repository.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
-    "type": "apikey",
-    "apikey": [
+    "type": "bearer",
+    "bearer": [
       {
-        "key": "key",
-        "value": "X-API-Key"
-      },
-      {
-        "key": "value",
-        "value": "{{apiKey}}"
-      },
-      {
-        "key": "in",
-        "value": "header"
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
       }
     ]
   },
@@ -28,9 +21,33 @@
       "script": {
         "type": "text/javascript",
         "exec": [
+          "(function () {",
+          "  if (String(pm.variables.get(\"authEnabled\")) === \"false\") return; // server has auth off",
+          "  const clientId = pm.variables.get(\"clientId\"), clientSecret = pm.variables.get(\"clientSecret\");",
+          "  if (!clientId || !clientSecret) { console.warn(\"clientId/clientSecret not set: requests go without a token\"); return; }",
+          "  const expiresAt = Number(pm.collectionVariables.get(\"accessTokenExpiresAt\") || 0);",
+          "  if (pm.collectionVariables.get(\"accessToken\") && Date.now() < expiresAt - 60000) return;",
+          "  pm.sendRequest({",
+          "    url: pm.variables.replaceIn(\"{{baseUrl}}\") + \"/v1/auth/token\", method: \"POST\",",
+          "    header: [{ key: \"Content-Type\", value: \"application/x-www-form-urlencoded\" }],",
+          "    body: { mode: \"urlencoded\", urlencoded: [",
+          "      { key: \"grant_type\", value: \"client_credentials\" }, { key: \"client_id\", value: clientId },",
+          "      { key: \"client_secret\", value: clientSecret }, { key: \"scope\", value: \"schemes:read\" }] },",
+          "  }, (err, res) => {",
+          "    if (err || res.code !== 200) {",
+          "      pm.collectionVariables.set(\"accessToken\", \"\"); pm.collectionVariables.set(\"accessTokenExpiresAt\", \"\");",
+          "      console.error(\"Token request failed:\", err || (res.code + \" \" + res.text()));",
+          "      return;",
+          "    }",
+          "    const body = res.json();",
+          "    pm.collectionVariables.set(\"accessToken\", body.access_token);",
+          "    pm.collectionVariables.set(\"accessTokenExpiresAt\", String(Date.now() + body.expires_in * 1000));",
+          "  });",
+          "})();",
           "const india = new Date(Date.now() + 5.5 * 3600 * 1000);",
           "if (!pm.environment.get(\"month\")) pm.collectionVariables.set(\"month\", india.getUTCMonth() + 1);",
-          "if (!pm.environment.get(\"year\")) pm.collectionVariables.set(\"year\", india.getUTCFullYear());"
+          "if (!pm.environment.get(\"year\")) pm.collectionVariables.set(\"year\", india.getUTCFullYear());",
+          "pm.collectionVariables.set(\"monthPadded\", String(pm.variables.get(\"month\")).padStart(2, \"0\"));"
         ]
       }
     },
@@ -57,6 +74,14 @@
     {
       "key": "year",
       "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "accessTokenExpiresAt",
+      "value": ""
     }
   ],
   "item": [
@@ -77,7 +102,7 @@
                 "health"
               ]
             },
-            "description": "Liveness check. No API key needed.",
+            "description": "Liveness check. No token needed.",
             "auth": {
               "type": "noauth"
             }
@@ -142,16 +167,17 @@
                   "pm.test(\"Body is a JSON array\", () => pm.expect(pm.response.json()).to.be.an(\"array\"));",
                   "const rows = pm.response.json();",
                   "pm.test(\"Dealer has rows (needs sample data loaded)\", () => pm.expect(rows.length).to.be.above(0));",
-                  "const FIELDS = [\"Customer\",\"FromDate\",\"ToDate\",\"ComponentDescription\",\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\"];",
+                  "const FIELDS = [\"Customer\",\"FromDate\",\"ToDate\",\"ComponentDescription\",\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\",\"NextSlabRate\"];",
                   "const COMPONENTS = [\"EB SLAB 1\", \"EB SLAB 2\", \"EB SLAB 3\", \"VALUE\", \"LUXURY\", \"PREMIUM 01\", \"PREMIUM 02\", \"EB FULL MONTH\"];",
                   "pm.test(\"Every row has exactly the template fields\", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(FIELDS)));",
                   "pm.test(\"Only the 8 template components are returned\", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));",
                   "pm.test(\"Customer matches the requested dealer\", () => rows.forEach(r => pm.expect(r.Customer).to.eql(pm.collectionVariables.get(\"dealerCode\") || pm.environment.get(\"dealerCode\"))));",
                   "pm.test(\"Dates are YYYY-MM-DD and FromDate <= ToDate\", () => rows.forEach(r => { pm.expect(r.FromDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.ToDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.FromDate <= r.ToDate).to.be.true; }));",
-                  "pm.test(\"Amounts are numbers (or null)\", () => rows.forEach(r => [\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\"].forEach(k => pm.expect(r[k] === null || typeof r[k] === \"number\").to.be.true)));",
+                  "pm.test(\"Amounts are numbers (or null)\", () => rows.forEach(r => [\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\",\"NextSlabRate\"].forEach(k => pm.expect(r[k] === null || typeof r[k] === \"number\").to.be.true)));",
                   "pm.test(\"Rows are ordered by ToDate, then template order\", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i]; pm.expect(a.ToDate < b.ToDate || (a.ToDate === b.ToDate && COMPONENTS.indexOf(a.ComponentDescription) <= COMPONENTS.indexOf(b.ComponentDescription))).to.be.true; } });",
-                  "const prefix = pm.variables.get(\"year\") + \"-\" + String(pm.variables.get(\"month\")).padStart(2, \"0\");",
-                  "pm.test(\"Rows belong to the requested month\", () => rows.forEach(r => pm.expect(r.FromDate.startsWith(prefix) || r.ToDate.startsWith(prefix)).to.be.true));",
+                  "const y = Number(pm.variables.get(\"year\")), m = Number(pm.variables.get(\"month\"));",
+                  "const monthStart = y + \"-\" + String(m).padStart(2, \"0\") + \"-01\", monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);",
+                  "pm.test(\"Every row is valid in the requested month (validity overlaps it)\", () => rows.forEach(r => pm.expect(r.FromDate <= monthEnd && r.ToDate >= monthStart).to.be.true));",
                   "pm.test(\"EB FULL MONTH Qualification is its GSR (GsrB), like the EB slabs\", () => rows.filter(r => r.ComponentDescription === \"EB FULL MONTH\").forEach(r => pm.expect(r.Qualification).to.eql(r.GsrB)));",
                   "pm.collectionVariables.set(\"api1RowCount\", rows.length);"
                 ]
@@ -199,7 +225,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "[\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-11\",\n    \"ComponentDescription\": \"EB SLAB 1\",\n    \"Qualification\": 405232.86,\n    \"GsrB\": 405232.86,\n    \"RebateRate\": 0.75,\n    \"ClearCut\": 0.0,\n    \"ShortfallAmount\": 0.0,\n    \"ShortfallPct\": 0.0\n  },\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-31\",\n    \"ComponentDescription\": \"LUXURY\",\n    \"Qualification\": 315.1,\n    \"GsrB\": 159292.8,\n    \"RebateRate\": 1.0,\n    \"ClearCut\": 1592.93,\n    \"ShortfallAmount\": 84.9,\n    \"ShortfallPct\": 21.23\n  }\n]"
+              "body": "[\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-11\",\n    \"ComponentDescription\": \"EB SLAB 1\",\n    \"Qualification\": 405232.86,\n    \"GsrB\": 405232.86,\n    \"RebateRate\": 0.75,\n    \"ClearCut\": 0.0,\n    \"ShortfallAmount\": 0.0,\n    \"ShortfallPct\": 0.0,\n    \"NextSlabRate\": 1.0\n  },\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-31\",\n    \"ComponentDescription\": \"LUXURY\",\n    \"Qualification\": 315.1,\n    \"GsrB\": 159292.8,\n    \"RebateRate\": 1.0,\n    \"ClearCut\": 1592.93,\n    \"ShortfallAmount\": 84.9,\n    \"ShortfallPct\": 21.23,\n    \"NextSlabRate\": 1.5\n  }\n]"
             },
             {
               "name": "200 - dealer with no data that month",
@@ -361,6 +387,51 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"{{month}}\",\n  \"year\": \"{{year}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Same row count as the first request\", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get(\"api1RowCount\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly schemes - month zero-padded (09)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "Month as two digits, unquoted: 09 is accepted as 9 (for October onwards this sends 10, 11, 12).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{monthPadded}},\n  \"year\": {{year}}\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -677,6 +748,622 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": true,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month -9 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": -9,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month -09 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": -09,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \"+9\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"+9\",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 9.0 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 9.0,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \"9.0\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"9.0\",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 009 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 009,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \"009\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"009\",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 00 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 00,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \" 9 \" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \" 9 \",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year 02026 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": 02026\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year \"26\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": \"26\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year \"+2026\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": \"+2026\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year 2026.0 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": 2026.0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Year \" 2026 \" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": \" 2026 \"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1091,7 +1778,7 @@
       "name": "4. Security",
       "item": [
         {
-          "name": "No API key -> 401",
+          "name": "No token -> 401 + WWW-Authenticate",
           "request": {
             "method": "POST",
             "header": [
@@ -1111,7 +1798,7 @@
                 "current-month"
               ]
             },
-            "description": "Only when the server has API_KEY set.",
+            "description": "Only when the server requires a token (authEnabled=true).",
             "auth": {
               "type": "noauth"
             },
@@ -1134,6 +1821,9 @@
                   "(function () {",
                   "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
                   "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Not authenticated\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Not authenticated\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
                   "})();"
                 ]
               }
@@ -1141,7 +1831,7 @@
           ]
         },
         {
-          "name": "Wrong API key -> 401",
+          "name": "Garbage token -> 401",
           "request": {
             "method": "POST",
             "header": [
@@ -1163,19 +1853,12 @@
             },
             "description": "",
             "auth": {
-              "type": "apikey",
-              "apikey": [
+              "type": "bearer",
+              "bearer": [
                 {
-                  "key": "key",
-                  "value": "X-API-Key"
-                },
-                {
-                  "key": "value",
-                  "value": "wrong-key"
-                },
-                {
-                  "key": "in",
-                  "value": "header"
+                  "key": "token",
+                  "value": "not-a-jwt",
+                  "type": "string"
                 }
               ]
             },
@@ -1198,6 +1881,265 @@
                   "(function () {",
                   "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
                   "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Invalid token\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Invalid token\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "pm.test(\"WWW-Authenticate has error=\\\"invalid_token\\\"\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.include('error=\"invalid_token\"'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tampered token signature -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "A real token with one character of its signature changed.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tamperedToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const parts = String(pm.collectionVariables.get(\"accessToken\") || \"x.y.z\").split(\".\");",
+                  "parts[2] = (parts[2][0] === \"A\" ? \"B\" : \"A\") + parts[2].slice(1);",
+                  "pm.variables.set(\"tamperedToken\", parts.join(\".\"));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Invalid token\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Invalid token\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "pm.test(\"WWW-Authenticate has error=\\\"invalid_token\\\"\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.include('error=\"invalid_token\"'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "X-API-Key only (old scheme) -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{clientSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "X-API-Key is no longer accepted.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Not authenticated\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Not authenticated\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Basic scheme on the data endpoint -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "Client credentials are only for /v1/auth/token; data needs a Bearer token.",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{clientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{clientSecret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Not authenticated\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Not authenticated\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Non-ASCII Bearer token -> 401, not 500",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "A non-ASCII credential used to crash the old key check (500).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "k\u00e9y",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Body is {detail: \\\"Invalid token\\\"}\", () => pm.expect(pm.response.json()).to.eql({detail: \"Invalid token\"}));",
+                  "pm.test(\"WWW-Authenticate: Bearer challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Bearer realm=\"scheme-api\"/));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "pm.test(\"WWW-Authenticate has error=\\\"invalid_token\\\"\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.include('error=\"invalid_token\"'));",
                   "})();"
                 ]
               }
@@ -1381,10 +2323,723 @@
                   "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
                   "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
                   "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"HSTS sent once (browsers use only the first)\", () => pm.expect(pm.response.headers.filter(h => h.key.toLowerCase() === \"strict-transport-security\").length).to.eql(1));",
                   "pm.test(\"HSTS max-age >= 1 year\", () => pm.expect(Number((pm.response.headers.get(\"Strict-Transport-Security\") || \"\").match(/max-age=(\\d+)/)[1])).to.be.at.least(31536000));",
                   "pm.test(\"Content-Security-Policy present\", () => pm.expect(pm.response.headers.get(\"Content-Security-Policy\")).to.be.a(\"string\"));",
                   "pm.test(\"X-Frame-Options: DENY\", () => pm.expect(pm.response.headers.get(\"X-Frame-Options\")).to.eql(\"DENY\"));",
                   "pm.test(\"No X-Powered-By header\", () => pm.expect(pm.response.headers.has(\"X-Powered-By\")).to.be.false);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Auth",
+      "item": [
+        {
+          "name": "Token - form-encoded credentials -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "RFC 6749 client credentials grant. The collection's own pre-request script does the same and stores {{accessToken}}.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "schemes:read",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Body is exactly access_token, token_type, expires_in, scope\", () => pm.expect(Object.keys(t)).to.have.members([\"access_token\", \"token_type\", \"expires_in\", \"scope\"]));",
+                  "pm.test(\"token_type is Bearer, scope is schemes:read\", () => { pm.expect(t.token_type).to.eql(\"Bearer\"); pm.expect(t.scope).to.eql(\"schemes:read\"); });",
+                  "pm.test(\"expires_in is 3600 (JWT_TTL_SECONDS)\", () => pm.expect(t.expires_in).to.eql(3600));",
+                  "pm.test(\"access_token is a JWT for this client\", () => { const parts = t.access_token.split(\".\"); pm.expect(parts).to.have.length(3); const c = JSON.parse(atob(parts[1].replace(/-/g, \"+\").replace(/_/g, \"/\"))); pm.expect(c.sub).to.eql(pm.variables.get(\"clientId\")); pm.expect(c.aud).to.eql(\"scheme-api\"); pm.expect(c.exp - c.iat).to.eql(t.expires_in); });",
+                  "pm.test(\"Client secret is not echoed\", () => pm.expect(pm.response.text()).to.not.include(pm.variables.get(\"clientSecret\")));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - JSON body -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{clientId}}\",\n  \"client_secret\": \"{{clientSecret}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Body is exactly access_token, token_type, expires_in, scope\", () => pm.expect(Object.keys(t)).to.have.members([\"access_token\", \"token_type\", \"expires_in\", \"scope\"]));",
+                  "pm.test(\"token_type is Bearer, scope is schemes:read\", () => { pm.expect(t.token_type).to.eql(\"Bearer\"); pm.expect(t.scope).to.eql(\"schemes:read\"); });",
+                  "pm.test(\"expires_in is 3600 (JWT_TTL_SECONDS)\", () => pm.expect(t.expires_in).to.eql(3600));",
+                  "pm.test(\"access_token is a JWT for this client\", () => { const parts = t.access_token.split(\".\"); pm.expect(parts).to.have.length(3); const c = JSON.parse(atob(parts[1].replace(/-/g, \"+\").replace(/_/g, \"/\"))); pm.expect(c.sub).to.eql(pm.variables.get(\"clientId\")); pm.expect(c.aud).to.eql(\"scheme-api\"); pm.expect(c.exp - c.iat).to.eql(t.expires_in); });",
+                  "pm.test(\"Client secret is not echoed\", () => pm.expect(pm.response.text()).to.not.include(pm.variables.get(\"clientSecret\")));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - HTTP Basic client authentication -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{clientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{clientSecret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Body is exactly access_token, token_type, expires_in, scope\", () => pm.expect(Object.keys(t)).to.have.members([\"access_token\", \"token_type\", \"expires_in\", \"scope\"]));",
+                  "pm.test(\"token_type is Bearer, scope is schemes:read\", () => { pm.expect(t.token_type).to.eql(\"Bearer\"); pm.expect(t.scope).to.eql(\"schemes:read\"); });",
+                  "pm.test(\"expires_in is 3600 (JWT_TTL_SECONDS)\", () => pm.expect(t.expires_in).to.eql(3600));",
+                  "pm.test(\"access_token is a JWT for this client\", () => { const parts = t.access_token.split(\".\"); pm.expect(parts).to.have.length(3); const c = JSON.parse(atob(parts[1].replace(/-/g, \"+\").replace(/_/g, \"/\"))); pm.expect(c.sub).to.eql(pm.variables.get(\"clientId\")); pm.expect(c.aud).to.eql(\"scheme-api\"); pm.expect(c.exp - c.iat).to.eql(t.expires_in); });",
+                  "pm.test(\"Client secret is not echoed\", () => pm.expect(pm.response.text()).to.not.include(pm.variables.get(\"clientSecret\")));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - wrong client_secret -> 401 invalid_client",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "wrong-secret-qa",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_client\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_client\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "pm.test(\"WWW-Authenticate: Basic challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Basic realm=/));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - unknown client_id -> 401 invalid_client",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "unknown-client-qa",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_client\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_client\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "pm.test(\"WWW-Authenticate: Basic challenge\", () => pm.expect(pm.response.headers.get(\"WWW-Authenticate\")).to.match(/^Basic realm=/));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - missing grant_type -> 400 invalid_request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - grant_type password -> 400 unsupported_grant_type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is unsupported_grant_type\", () => pm.expect(pm.response.json().error).to.eql(\"unsupported_grant_type\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - invalid scope -> 400 invalid_scope",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "admin",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_scope\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_scope\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - Basic and body credentials together -> 400 invalid_request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{clientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{clientSecret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - GET -> 405",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 405\", () => pm.response.to.have.status(405));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - response is not cacheable (no-store, Pragma no-cache)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"X-Content-Type-Options: nosniff\", () => pm.expect(pm.response.headers.get(\"X-Content-Type-Options\")).to.eql(\"nosniff\"));",
+                  "})();"
                 ]
               }
             }

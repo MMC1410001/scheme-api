@@ -58,6 +58,9 @@ def load_schemes(
     (e.g. after a business-rule change); the upsert then rewrites their rows. limit loads at most
     that many new files (for testing).
 
+    A file with rows that can't be read is read once more; if rows are still bad, its good rows are
+    saved and the file is recorded as failed (counted in files_failed), so it is not retried.
+
     stats and done carry a run across reconnects: counts are added as each file finishes, and the
     paths of files dealt with (skipped, loaded or failed) are kept in done, so a retry neither
     repeats them nor counts them twice.
@@ -87,7 +90,13 @@ def load_schemes(
 
     def prepare(file: SourceFile) -> tuple[list[dict], Counter, float]:
         started = time.monotonic()
-        records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows)
+        # Bad rows are logged one by one only from the read that is kept, so each appears once.
+        records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows,
+                                            log_rows=False)
+        if counts["rows_bad"]:
+            # Read (download) the file once more, in case the first copy was damaged.
+            log.warning("%s: %d rows could not be read; reading the file again", file.path, counts["rows_bad"])
+            records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows)
         return records, counts, time.monotonic() - started
 
     workers = max(1, settings.loader_workers)
@@ -98,7 +107,7 @@ def load_schemes(
             try:
                 records, counts, read_seconds = future.result()
                 started = time.monotonic()
-                save_scheme_file(conn, file, year, month, records)
+                save_scheme_file(conn, file, year, month, records, counts["rows_bad"])
             except psycopg.OperationalError:
                 raise  # connection lost: main() reconnects and retries this file
             except Exception:
@@ -107,10 +116,17 @@ def load_schemes(
                 stats["files_failed"] += 1
                 done.add(file.path)
                 continue
-            log.info("Loaded %s: %d rows (read %.1fs, save %.1fs)", file.path, len(records),
-                     read_seconds, time.monotonic() - started)
+            if counts["rows_bad"]:
+                # Still bad after reading the file again: its good rows are saved, the file is recorded
+                # as failed (ingested_files.status) and not retried until SAP re-uploads it.
+                log.error("%s: %d rows still could not be read after reading the file again; its %d good rows "
+                          "are loaded and the file is marked failed", file.path, counts["rows_bad"], len(records))
+                stats["files_failed"] += 1
+            else:
+                log.info("Loaded %s: %d rows (read %.1fs, save %.1fs)", file.path, len(records),
+                         read_seconds, time.monotonic() - started)
+                stats["files_loaded"] += 1
             stats.update(counts)
-            stats["files_loaded"] += 1
             stats["rows_loaded"] += len(records)
             done.add(file.path)
     except BaseException:
@@ -122,8 +138,11 @@ def load_schemes(
     return stats
 
 
-def parse_scheme_file(content: bytes, path: str, year: int, month: int, header_rows: int) -> tuple[list[dict], Counter]:
-    """One SAP file's rows for the 8 template components, plus counts of rows left out."""
+def parse_scheme_file(
+    content: bytes, path: str, year: int, month: int, header_rows: int, log_rows: bool = True,
+) -> tuple[list[dict], Counter]:
+    """One SAP file's rows for the 8 template components, plus counts of rows left out.
+    With log_rows, each skipped row is logged with the reason."""
     counts: Counter = Counter()
     rows = read_rows(content, path, header_rows)
     if rows:
@@ -133,7 +152,8 @@ def parse_scheme_file(content: bytes, path: str, year: int, month: int, header_r
         try:
             record = to_record(row, year, month, path)
         except ValueError as exc:
-            log.warning("%s data row %d skipped: %s", path, number, exc)
+            if log_rows:
+                log.warning("%s data row %d skipped: %s", path, number, exc)
             counts["rows_bad"] += 1
             continue
         if record is None:
@@ -181,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             with psycopg.connect(settings.database_url, autocommit=True, row_factory=dict_row,
                                  keepalives=1, keepalives_idle=30, application_name=run_name) as conn:
                 if args.command == "init-db":
-                    conn.execute(SCHEMA_FILE.read_text())
+                    ensure_schema(conn)
                     log.info("Tables created")
                     return 0
                 if args.command == "schemes":
@@ -192,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                         log.error("Reconnected, but another session holds the loader lock; stopping this run")
                         lost_lock = True
                         break
+                    ensure_schema(conn)
                     today = datetime.now(ZoneInfo(settings.timezone)).date()
                     # --limit counts files across reconnects. With --reload a reconnect starts the
                     # month over; the upsert makes that safe.
@@ -208,9 +229,16 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(RECONNECT_WAIT_SECONDS)
 
     log.info("Done: %s", dict(stats))
-    if stats["files_loaded"] and settings.cache_enabled and settings.redis_url:
+    # rows_loaded also counts the good rows of files marked failed, which are saved too.
+    if (stats["files_loaded"] or stats["rows_loaded"]) and settings.cache_enabled and settings.redis_url:
         bump_data_version(settings.redis_url)  # cached API responses now get the new data
     return 1 if stats["files_failed"] or lost_lock else 0
+
+
+def ensure_schema(conn: psycopg.Connection) -> None:
+    """Create missing tables and indexes. Idempotent, so each load run also picks up schema
+    additions from newer releases (e.g. API 1's dealer index) without a separate init-db step."""
+    conn.execute(SCHEMA_FILE.read_text())
 
 
 def take_loader_lock(conn: psycopg.Connection, run_name: str, reclaim: bool = False, key: str = LOADER_LOCK_KEY) -> bool:

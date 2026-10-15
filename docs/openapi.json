@@ -6,13 +6,190 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/auth/token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get an access token (OAuth2 client credentials)",
+        "description": "Exchange client_id and client_secret for a Bearer token valid for 1 hour.\n\nSend `grant_type=client_credentials` form-encoded (RFC 6749) or as JSON, with the client's\ncredentials in HTTP Basic auth or as `client_id` and `client_secret` in the body (not both).\nReuse the token until it expires; this endpoint has its own, much lower, rate limit.",
+        "operationId": "token_v1_auth_token_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "enum": [
+                      "client_credentials"
+                    ]
+                  },
+                  "client_id": {
+                    "type": "string",
+                    "description": "Omit when sent with HTTP Basic auth"
+                  },
+                  "client_secret": {
+                    "type": "string",
+                    "format": "password",
+                    "description": "Omit when sent with HTTP Basic auth"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "schemes:read"
+                    ],
+                    "description": "Optional; the only scope"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "grant_type"
+                ]
+              }
+            },
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "enum": [
+                      "client_credentials"
+                    ]
+                  },
+                  "client_id": {
+                    "type": "string",
+                    "description": "Omit when sent with HTTP Basic auth"
+                  },
+                  "client_secret": {
+                    "type": "string",
+                    "format": "password",
+                    "description": "Omit when sent with HTTP Basic auth"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "schemes:read"
+                    ],
+                    "description": "Optional; the only scope"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "grant_type"
+                ]
+              },
+              "example": {
+                "grant_type": "client_credentials",
+                "client_id": "partner",
+                "client_secret": "<client secret>"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Access token; reuse it until expires_in seconds have passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                },
+                "example": {
+                  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                  "token_type": "Bearer",
+                  "expires_in": 3600,
+                  "scope": "schemes:read"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request, wrong grant_type or scope (RFC 6749 errors)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthErrorResponse"
+                },
+                "example": {
+                  "error": "unsupported_grant_type",
+                  "error_description": "Only client_credentials is supported"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown client or wrong secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthErrorResponse"
+                },
+                "example": {
+                  "error": "invalid_client",
+                  "error_description": "Client authentication failed"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than MAX_BODY_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Request body too large"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than TOKEN_RATE_LIMIT_PER_MINUTE token requests from this IP in a minute",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Too many requests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; details are logged, not returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Internal server error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/schemes/current-month": {
       "post": {
         "tags": [
           "schemes"
         ],
         "summary": "API 1: a dealer's scheme rows for the requested month",
-        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row's month is the GCS month folder its SAP file came from. Returns an empty list when the\ndealer has no data for that month.",
+        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Returns an empty list when the dealer has no data for that month.",
         "operationId": "month_schemes_v1_schemes_current_month_post",
         "requestBody": {
           "content": {
@@ -91,7 +268,8 @@
                         "RebateRate": 0.75,
                         "ClearCut": 0.0,
                         "ShortfallAmount": 0.0,
-                        "ShortfallPct": 0.0
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 1.0
                       },
                       {
                         "Customer": "6100000001",
@@ -103,7 +281,8 @@
                         "RebateRate": 1.0,
                         "ClearCut": 1592.93,
                         "ShortfallAmount": 84.9,
-                        "ShortfallPct": 21.23
+                        "ShortfallPct": 21.23,
+                        "NextSlabRate": 1.5
                       },
                       {
                         "Customer": "6100000001",
@@ -115,7 +294,8 @@
                         "RebateRate": 2.25,
                         "ClearCut": 0.0,
                         "ShortfallAmount": 0.0,
-                        "ShortfallPct": 0.0
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 0.0
                       }
                     ]
                   },
@@ -128,14 +308,35 @@
             }
           },
           "401": {
-            "description": "X-API-Key missing or wrong (only when the server has API_KEY set)",
+            "description": "Bearer token missing, invalid or expired (get a new one from /v1/auth/token)",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "RFC 6750 challenge",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorMessage"
                 },
                 "example": {
-                  "detail": "Invalid or missing API key"
+                  "detail": "Token expired"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the schemes:read scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Insufficient scope"
                 }
               }
             }
@@ -171,6 +372,27 @@
                       "type": "missing"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than RATE_LIMIT_PER_SECOND requests from this IP in one second; retry after Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                },
+                "example": {
+                  "detail": "Too many requests"
                 }
               }
             }
@@ -212,7 +434,9 @@
         },
         "security": [
           {
-            "APIKeyHeader": []
+            "OAuth2ClientCredentials": [
+              "schemes:read"
+            ]
           }
         ]
       }
@@ -257,7 +481,26 @@
           "detail"
         ],
         "title": "ErrorMessage",
-        "description": "Body of 401, 413, 500 and 503 responses."
+        "description": "Body of 401, 403, 413, 429, 500 and 503 responses."
+      },
+      "OAuthErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "error_description": {
+            "type": "string",
+            "title": "Error Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "error_description"
+        ],
+        "title": "OAuthErrorResponse",
+        "description": "RFC 6749 section 5.2 error from the token endpoint."
       },
       "SchemeMonthRequest": {
         "properties": {
@@ -277,7 +520,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Month",
-            "description": "1-12",
+            "description": "1-12 (9 or 09)",
             "examples": [
               10
             ]
@@ -287,7 +530,7 @@
             "maximum": 2100.0,
             "minimum": 2000.0,
             "title": "Year",
-            "description": "Four-digit year",
+            "description": "Four-digit year, 2000-2100",
             "examples": [
               2026
             ]
@@ -300,7 +543,7 @@
           "year"
         ],
         "title": "SchemeMonthRequest",
-        "description": "API 1 body: the dealer and the month to return. Month and year may be JSON numbers or numeric strings."
+        "description": "API 1 body: the dealer and the month to return. Month is 1-12, sent as 9 or 09 (number or string); year is four digits, 2000-2100 (number or string)."
       },
       "SchemeRow": {
         "properties": {
@@ -405,6 +648,18 @@
               }
             ],
             "title": "Shortfallpct"
+          },
+          "NextSlabRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextslabrate",
+            "description": "Rebate rate of the next slab (SAP Next Slab Rate)"
           }
         },
         "type": "object",
@@ -418,10 +673,40 @@
           "RebateRate",
           "ClearCut",
           "ShortfallAmount",
-          "ShortfallPct"
+          "ShortfallPct",
+          "NextSlabRate"
         ],
         "title": "SchemeRow",
         "description": "One component row, with the columns of the API template. Keys are PascalCase, like the other dealer APIs."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "expires_in",
+          "scope"
+        ],
+        "title": "TokenResponse",
+        "description": "RFC 6749 section 5.1 access token response."
       },
       "ValidationErrorResponse": {
         "properties": {
@@ -487,10 +772,17 @@
       }
     },
     "securitySchemes": {
-      "APIKeyHeader": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-API-Key"
+      "OAuth2ClientCredentials": {
+        "type": "oauth2",
+        "description": "Get a token from POST /v1/auth/token with your client_id and client_secret, then send `Authorization: Bearer <token>`. Tokens last 1 hour; reuse one until it expires.",
+        "flows": {
+          "clientCredentials": {
+            "scopes": {
+              "schemes:read": "Read dealer scheme rows"
+            },
+            "tokenUrl": "/v1/auth/token"
+          }
+        }
       }
     }
   }

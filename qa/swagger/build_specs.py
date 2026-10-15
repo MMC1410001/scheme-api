@@ -7,12 +7,17 @@ Open a file in Swagger Editor (https://editor.swagger.io, File > Import file) or
 """
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
 sys.path.insert(0, str(OUT.parent.parent))  # run as a file, so make the app package importable
 
+
+# Only the spec is read, no server starts: allow it without auth settings (app/main.py refuses to
+# import with APP_ENV unset and no AUTH_CLIENTS/JWT_SECRET).
+os.environ.setdefault("APP_ENV", "local")
 from app.main import app  # noqa: E402
 
 SERVERS = [
@@ -21,8 +26,9 @@ SERVERS = [
      "variables": {"host": {"default": "dev-host-to-be-confirmed"}}},
 ]
 HOW_TO = (
-    "\n\n**Try it:** pick a server, click **Authorize** and enter the X-API-Key (not needed while the "
-    "server has no API_KEY set), then **Try it out** on the request and pick an example.\n\n"
+    "\n\n**Try it:** pick a server, click **Authorize** and enter your client_id and client_secret "
+    "(OAuth2 client credentials; Local: local-client / local-test-secret). Swagger gets a Bearer token from "
+    "POST /v1/auth/token and sends it on every call. Then **Try it out** on the request and pick an example.\n\n"
     "Full guide: docs/API_GUIDE.md in the repository."
 )
 SPECS = {

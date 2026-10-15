@@ -1,7 +1,10 @@
+import json
 import os
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 # Which settings file to read: .env.local (default), .env.dev, .env.uat or .env.prod.
@@ -26,10 +29,24 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     # Upper bound on how long a cached response lives; new data replaces it sooner (data version).
     cache_ttl_seconds: int = 900
-    # Optional. When set, callers must send it in the X-API-Key header.
-    api_key: str | None = None
+    # OAuth2 client credentials (app/security.py). JSON of client_id -> SHA-256 hex of its client_secret,
+    # e.g. AUTH_CLIENTS={"partner": "<64 hex>"}; create one with `python -m app.security new-client partner`.
+    # Required outside APP_ENV=local (the API will not start without it and JWT_SECRET).
+    auth_clients: Annotated[dict[str, str], NoDecode] = {}
+    # HS256 signing key for access tokens, 32+ characters (`python -m app.security new-jwt-secret`).
+    jwt_secret: SecretStr | None = None
+    # The old signing key while rotating; tokens it signed stay valid until they expire.
+    jwt_previous_secret: SecretStr | None = None
+    # Access token lifetime.
+    jwt_ttl_seconds: int = 3600
     # Interactive docs at /docs and /openapi.json. Consider turning off in production.
     docs_enabled: bool = True
+    # Per-IP rate limit (app/ratelimit.py): requests per second from one client IP before 429.
+    # Counted in Redis when REDIS_URL is set (across workers), else per worker.
+    rate_limit_enabled: bool = True
+    rate_limit_per_second: int = 2500
+    # POST /v1/auth/token per client IP per minute, on top of the above. A client needs one token an hour.
+    token_rate_limit_per_minute: int = 30
     # Requests only carry a dealer code, so anything bigger is rejected (413).
     max_body_bytes: int = 4096
     # "Current month" is decided in this timezone, not the server's.
@@ -45,6 +62,20 @@ class Settings(BaseSettings):
     scheme_header_rows: int = 1
     # Files the loader downloads and parses ahead, in parallel, while it saves the current one.
     loader_workers: int = 4
+
+
+    @field_validator("auth_clients", mode="before")
+    @classmethod
+    def _parse_auth_clients(cls, value):
+        """JSON from the environment; an empty AUTH_CLIENTS= means no clients rather than a parse error."""
+        if isinstance(value, str):
+            return json.loads(value) if value.strip() else {}
+        return value
+
+    @field_validator("jwt_secret", "jwt_previous_secret", mode="before")
+    @classmethod
+    def _empty_secret_is_unset(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 @lru_cache

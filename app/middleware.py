@@ -1,4 +1,7 @@
-"""Security middleware: response headers and a request body size limit."""
+"""Request middleware: security headers, a body size limit, and leniency for zero-padded JSON numbers."""
+import json
+import re
+
 from fastapi import HTTPException, status
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -83,3 +86,67 @@ class BodySizeLimitMiddleware:
 async def _too_large(scope: Scope, receive: Receive, send: Send) -> None:
     response = JSONResponse({"detail": "Request body too large"}, status_code=status.HTTP_413_CONTENT_TOO_LARGE)
     await response(scope, receive, send)
+
+
+# A JSON string (kept as is) or the "0" of a bare 01-09. Longer padding (009), signs (-09) and
+# decimals (09.5) are left alone, so those bodies stay invalid JSON.
+_STRING_OR_PADDING = re.compile(r'"(?:[^"\\]|\\.)*"|(?<![\w.\-])0(?=[1-9](?![\w.]))')
+
+
+def strip_number_padding(body: bytes) -> bytes | None:
+    """Return body with 01-09 written as 1-9 if that makes it valid JSON, else None."""
+    try:
+        text = body.decode()
+    except UnicodeDecodeError:
+        return None
+    fixed = _STRING_OR_PADDING.sub(lambda m: m.group(0) if m.group(0).startswith('"') else "", text)
+    if fixed == text:
+        return None
+    try:
+        json.loads(fixed)
+    except ValueError:
+        return None
+    return fixed.encode()
+
+
+class LenientJsonNumbersMiddleware:
+    """Accept a zero-padded month such as "month": 09, which strict JSON rejects.
+
+    Bodies that already parse are passed through untouched; only an invalid JSON body is
+    rewritten, and only if stripping the padding makes it valid.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        content_type = dict(scope.get("headers", [])).get(b"content-type", b"")
+        if scope["type"] != "http" or not content_type.startswith(b"application/json"):
+            await self.app(scope, receive, send)
+            return
+
+        chunks = []
+        while True:
+            try:
+                message = await receive()
+            except HTTPException as exc:  # the size limit, raised outside FastAPI's handlers here
+                await JSONResponse({"detail": exc.detail}, status_code=exc.status_code)(scope, receive, send)
+                return
+            if message["type"] != "http.request":  # client disconnected
+                await self.app(scope, _replay([message], receive), send)
+                return
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        try:
+            json.loads(body)
+        except ValueError:
+            body = strip_number_padding(body) or body
+        await self.app(scope, _replay([{"type": "http.request", "body": body, "more_body": False}], receive), send)
+
+
+def _replay(messages: list[Message], receive: Receive) -> Receive:
+    async def replayed() -> Message:
+        return messages.pop(0) if messages else await receive()
+    return replayed
