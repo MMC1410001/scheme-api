@@ -310,9 +310,13 @@ For DevOps, per environment:
    through a secure channel; it must never be committed.
 3. `GOOGLE_APPLICATION_CREDENTIALS`: path to the GCS service-account key mounted on the server
    (or run as a service account that can read the bucket).
-4. Give the cron job the same settings as the API (database, GCS and, for the cache,
+4. `DOCS_ENABLED`: `true` for dev and UAT, `false` for prod (the template defaults to `true`, so
+   set it explicitly there). Swagger UI is served by the API itself at `/docs`; after deploying,
+   `/docs` should return 200 on dev/UAT and `/docs` and `/openapi.json` 404 on prod. The page loads
+   its scripts from `cdn.jsdelivr.net`.
+5. Give the cron job the same settings as the API (database, GCS and, for the cache,
    `CACHE_ENABLED` and `REDIS_URL`).
-5. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`.
+6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`.
 
 ## Response cache (Redis)
 
