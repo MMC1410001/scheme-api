@@ -3,7 +3,7 @@
 //   k6 run stress.js
 //   MAX_VUS=1000 k6 run stress.js
 import { thresholds, summaryTrendStats, summaryTo } from './config.js';
-import { mixedTraffic } from './traffic.js';
+import { userIteration } from './traffic.js';
 
 const MAX = parseInt(__ENV.MAX_VUS || '600');
 
@@ -28,5 +28,5 @@ export const options = {
   summaryTrendStats,
 };
 
-export default mixedTraffic;
+export default userIteration;
 export const handleSummary = summaryTo('stress');

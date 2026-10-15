@@ -22,7 +22,7 @@ def test_two_row_header_with_merged_cells_is_flattened():
         sheet.merge_cells("B1:C1")  # "Value" spans two columns
         sheet.merge_cells("D1:E1")
 
-    rows = read_rows(make_xlsx(build), "report.xlsx", header_rows=2)
+    rows = read_rows(make_xlsx(build), "schemes.xlsx", header_rows=2)
 
     assert rows == [
         {
@@ -58,8 +58,8 @@ def test_csv_files_are_supported():
     assert read_rows(content, "f.csv", header_rows=1) == [{"customer": "1001", "scheme": "EB Slab 1"}]
 
 
-def test_group_names_fill_right_like_the_generated_report():
-    # Same shape as the API 2 report: fixed columns merged over both header rows, then groups whose
+def test_group_names_fill_right_over_merged_cells():
+    # Fixed columns merged over both header rows, then groups whose
     # name is only in the first cell. Repeated column names stay unique thanks to the group prefix.
     def build(sheet):
         sheet.append(["Zone", "Customer", "Value Slab", None, "Early Bird", None, None])

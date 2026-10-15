@@ -3,8 +3,8 @@
 Files with several header rows (e.g. "Value Slab" merged over "GSR(Q) Value" and
 "Clear Cut") become single names like "value_slab_gsr_q_value", which a database can store.
 
-Workbooks are streamed (openpyxl read-only mode), so a 100 MB report with
-30 million cells is read row by row instead of being loaded into memory.
+Workbooks are streamed (openpyxl read-only mode), so a large file is read row by row
+instead of being loaded into memory.
 """
 import csv
 import io
@@ -58,8 +58,8 @@ def _fill_merged_groups(header_rows: list[list[Any]]) -> list[list[Any]]:
 
     Excel stores a merged cell's value only in its first cell, and streaming mode cannot see the
     merges, so "Value Slab" merged over 22 columns arrives as "Value Slab" followed by 21 blanks.
-    Only cells that have a column name below them are filled: in the real API 2 report, a blank
-    group cell always belongs to the group on its left.
+    Only cells that have a column name below them are filled: a blank group cell is taken to
+    belong to the group on its left.
     """
     if len(header_rows) < 2:
         return header_rows
@@ -81,7 +81,7 @@ def _fill_merged_groups(header_rows: list[list[Any]]) -> list[list[Any]]:
 def _iter_xlsx(content: bytes) -> Iterator[list[Any]]:
     workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     try:
-        sheet = workbook.worksheets[0]  # API 2 reports have one sheet ("Output")
+        sheet = workbook.worksheets[0]  # data is on the first sheet
         for row in sheet.iter_rows(values_only=True):
             yield list(row)
     finally:

@@ -1,4 +1,4 @@
-// Checks that belong to the server, not to API 1 or API 2: health, unknown routes, HTTPS.
+// Checks that belong to the server, not to API 1: health, unknown routes, HTTPS.
 const { test, expect, BASE_URL, newApi, useClient } = require('./helpers');
 
 test.describe('Common', () => {
@@ -31,12 +31,5 @@ test.describe('Common', () => {
     }
     expect([-1, 301, 302, 307, 308]).toContain(status);
     await ctx.dispose();
-  });
-
-  test('COMMON_TC_5 API 2 is on hold: POST /v1/schemes/report returns 404 and is not in the spec @negative', async () => {
-    expect((await client().post('/v1/schemes/report', { data: { dealer_code: '6100000001' } })).status()).toBe(404);
-    const spec = await client().get('/openapi.json');
-    test.skip(spec.status() === 404, 'docs are turned off on this server');
-    expect(Object.keys((await spec.json()).paths)).not.toContain('/v1/schemes/report');
   });
 });

@@ -31,12 +31,6 @@ SPECS = {
         "POST {dealer_code, month, year} returns the dealer's rows for the 8 template components "
         "(EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02, EB FULL MONTH) in that month.",
     ),
-    # API 2 is on hold (2026-10-15): no spec is generated. Uncomment (and the endpoint) to restore.
-    # "Scheme_API2_Report.openapi.json": (
-    #     "/v1/schemes/report", "Scheme API 2 - Dealer report",
-    #     "POST {dealer_code} returns the dealer's row from the latest generated report "
-    #     "(newest month folder, then highest version).",
-    # ),
 }
 
 

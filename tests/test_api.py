@@ -33,14 +33,6 @@ class FakeRepository:
         self.calls.append((dealer_code, year, month))
         return [SCHEME_ROW]
 
-    def latest_report(self):
-        return {"id": 7, "gcs_path": "automated-generated-files/output/2026/09/r_v1.xlsx",
-                "year": 2026, "month": 9, "version": 1, "columns": ["customer", "value_slab_gsr_q_value"]}
-
-    def report_rows(self, report, dealer_code):
-        self.calls.append((report["id"], dealer_code))
-        return [{"customer": "1001", "value_slab_gsr_q_value": 1200}]
-
 
 @pytest.fixture
 def repo():
@@ -79,13 +71,6 @@ def test_api1_returns_template_columns_for_the_requested_month(client, repo):
 def test_leading_zeros_in_dealer_code_are_ignored(client, repo):
     client.post("/v1/schemes/current-month", json={"dealer_code": "0006100009999", **MONTH})
     assert repo.calls[0][0] == "6100009999"
-
-
-def test_api2_is_on_hold_and_not_served(client, repo):
-    # API 2 is on hold (2026-10-15): its endpoint is commented out in app/routes.py.
-    assert client.post("/v1/schemes/report", json={"dealer_code": "1001"}).status_code == 404
-    assert "/v1/schemes/report" not in app.openapi()["paths"]
-    assert repo.calls == []
 
 
 @pytest.mark.parametrize("body", [{}, {"dealer_code": ""}, {"dealer_code": "   "}])

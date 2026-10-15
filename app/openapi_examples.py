@@ -19,12 +19,6 @@ API1_REQUESTS = {
     "invalid_missing_year": {"summary": "Year missing (422)", "value": {"dealer_code": "6100000001", "month": 10}},
 }
 
-API2_REQUESTS = {
-    "valid": {"summary": "Dealer code", "value": {"dealer_code": "6100000001"}},
-    "number": {"summary": "Dealer code as a number", "value": {"dealer_code": 6100000001}},
-    "invalid_characters": {"summary": "Characters other than letters and digits (422)", "value": {"dealer_code": "6100-0001"}},
-}
-
 
 def _row(component, to_date, qualification, gsr_b, rate, clear_cut=0.0, shortfall=0.0, shortfall_pct=0.0):
     return {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": to_date, "ComponentDescription": component,
@@ -42,19 +36,6 @@ API1_ROWS = {
         ],
     },
     "empty": {"summary": "No data for this dealer or month", "value": []},
-}
-
-API2_ROWS = {
-    "row": {
-        "summary": "Dealer in the latest report (first columns shown; the real report has ~870)",
-        "value": [{
-            "zone": "Central", "region": "Bihar North", "depot_code": "1302", "customer": "6100000001",
-            "customer_name": "Sample Paints", "value_slab_gsr_q_value": 125000.5, "value_slab_gsr_b_value": 125000.5,
-            "value_slab_value_cn_pct": 0.4, "early_bird_gsr_q_eb_1": 336479.88, "early_bird_clear_cut": None,
-            "luxury_volume_q_luxury": 315,
-        }],
-    },
-    "empty": {"summary": "No report loaded, or the dealer is not in it", "value": []},
 }
 
 

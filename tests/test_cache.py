@@ -13,7 +13,7 @@ from app.main import app
 from app.repository import get_repository
 from tests.test_api import MONTH, FakeRepository
 
-API1 = "/v1/schemes/current-month"  # API 2 is on hold
+API1 = "/v1/schemes/current-month"
 
 
 class FakeRedis:

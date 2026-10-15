@@ -6,7 +6,6 @@
 //                  `scripts/make_sample_data.py --perf-dealers N`
 //   DEALER_COUNT   how many perf dealers exist (default 20000)
 //   UNKNOWN_RATE   share of requests for dealers with no data (default 0.05)
-//   API            api1 (default); api2 and both are refused while API 2 is on hold (see traffic.js)
 //   MONTH, YEAR    month sent to API 1 (default: the current month in India time)
 import { check } from 'k6';
 import exec from 'k6/execution';
@@ -18,7 +17,6 @@ const DEALER_COUNT = parseInt(__ENV.DEALER_COUNT || '20000');
 const UNKNOWN_RATE = parseFloat(__ENV.UNKNOWN_RATE || '0.05');
 
 export const API1 = `${BASE_URL}/v1/schemes/current-month`;
-export const API2 = `${BASE_URL}/v1/schemes/report`;
 
 const nowInIndia = new Date(Date.now() + 5.5 * 3600 * 1000);
 export const MONTH = {
@@ -58,30 +56,19 @@ export function checkApi1(res) {
   });
 }
 
-export function checkApi2(res) {
-  const rows = jsonArray(res);
-  return check(res, {
-    'API 2 status is 200': (r) => r.status === 200,
-    'API 2 body is an array': () => rows !== null,
-    'API 2 returns at most one row, with customer': () => rows !== null && rows.length <= 1 && rows.every((row) => 'customer' in row),
-  });
-}
-
 export const summaryTrendStats = ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'];
 
 // Pass/fail criteria. A dealer lookup is a single indexed query, so we hold it to a tight p95.
 export const thresholds = {
   http_req_failed: ['rate<0.01'],                                 // < 1% errors
   'http_req_duration{name:current-month}': ['p(95)<500', 'p(99)<1000'],
-  // 'http_req_duration{name:report}': ['p(95)<500', 'p(99)<1000'],  // API 2 is on hold
   checks: ['rate>0.99'],                                          // > 99% of checks pass
 };
 
-// Writes a JSON summary to reports/<script>[-<API>]-summary.json next to the console output.
+// Writes a JSON summary to reports/<script>-summary.json next to the console output.
 export function summaryTo(name) {
-  const suffix = __ENV.API ? `-${__ENV.API.toLowerCase()}` : '';
   return (data) => ({
-    [`reports/${name}${suffix}-summary.json`]: JSON.stringify(data, null, 2),
+    [`reports/${name}-summary.json`]: JSON.stringify(data, null, 2),
     stdout: '\n' + textSummary(data),
   });
 }

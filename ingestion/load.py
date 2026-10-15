@@ -1,14 +1,11 @@
 """Write parsed files into Postgres. Each file is loaded in one transaction."""
-from collections.abc import Iterable, Iterator
-from itertools import islice
 from typing import Any
 
 from psycopg import Connection
-from psycopg.types.json import Json, Jsonb
+from psycopg.types.json import Jsonb
 
 from ingestion.sources import SourceFile
 
-REPORT_BATCH_SIZE = 1000
 SCHEME_KEY = ("year", "month", "dealer_code", "agreement", "deal_suffix")
 SCHEME_FIELDS = (
     *SCHEME_KEY, "component", "valid_from", "valid_to", "qualification_basis",
@@ -64,38 +61,10 @@ def save_scheme_file(
             cur.execute(_UPSERT_STAGE)
 
 
-def save_report_file(
-    conn: Connection,
-    file: SourceFile,
-    year: int | None,
-    month: int | None,
-    version: int | None,
-    columns: list[str],
-    rows: Iterable[tuple[str, list[Any]]],
-) -> int:
-    """Store a report in one transaction, streaming its rows in batches. Returns the row count."""
-    with conn.transaction():
-        file_id = _replace_file(conn, "report", file, year, month, 0)
-        count = 0
-        with conn.cursor() as cur:
-            for batch in batched(rows, REPORT_BATCH_SIZE):
-                cur.executemany(
-                    "INSERT INTO report_rows (file_id, dealer_code, cells) VALUES (%s, %s, %s)",
-                    [(file_id, dealer_code, Json(cells)) for dealer_code, cells in batch],
-                )
-                count += len(batch)
-        conn.execute(
-            "UPDATE ingested_files SET row_count = %s, version = %s, columns = %s WHERE id = %s",
-            (count, version, Json(columns), file_id),
-        )
-    return count
-
-
 def _replace_file(
-    conn: Connection, kind: str, file: SourceFile, year: int | None, month: int | None, row_count: int
+    conn: Connection, kind: str, file: SourceFile, year: int, month: int, row_count: int
 ) -> int:
-    # For reports, deleting the old entry also deletes its rows (ON DELETE CASCADE),
-    # so a re-uploaded report replaces itself. Scheme rows are upserted instead.
+    # Re-recording a file replaces its entry; its scheme rows are upserted, not deleted.
     conn.execute("DELETE FROM ingested_files WHERE kind = %s AND gcs_path = %s", (kind, file.path))
     return conn.execute(
         """
@@ -105,9 +74,3 @@ def _replace_file(
         """,
         (kind, file.path, file.generation, file.updated_at, year, month, row_count),
     ).fetchone()["id"]
-
-
-def batched(items: Iterable[Any], size: int) -> Iterator[list[Any]]:
-    iterator = iter(items)
-    while batch := list(islice(iterator, size)):
-        yield batch
