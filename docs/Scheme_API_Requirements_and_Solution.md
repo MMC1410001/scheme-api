@@ -6,7 +6,7 @@
 | Consumer | client team |
 | Version | 0.4 (draft) — API 2 removed; document covers API 1 only |
 | Date | 15 October 2026 |
-| Author | Mayur Chaudhary |
+| Author | Project team |
 | Status | API 1 built and tested on sample and real SAP data. |
 
 ## Index
