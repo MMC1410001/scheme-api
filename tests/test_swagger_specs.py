@@ -11,7 +11,6 @@ from app.schemas import SchemeMonthRequest, SchemeRow
 SWAGGER = Path(__file__).resolve().parent.parent / "qa" / "swagger"
 SPECS = {
     "/v1/schemes/current-month": ("Scheme_API1_Current_Month.openapi.json", SchemeMonthRequest),
-    # "/v1/schemes/report": ("Scheme_API2_Report.openapi.json", DealerRequest),  # API 2 is on hold
 }
 
 
@@ -70,8 +69,3 @@ def test_error_responses_are_documented(endpoint):
     responses = load(SPECS[endpoint][0])["paths"][endpoint]["post"]["responses"]
     assert {"200", "401", "413", "422", "500", "503"} <= set(responses)
 
-
-def test_no_spec_for_api2_while_on_hold():
-    assert not (SWAGGER / "Scheme_API2_Report.openapi.json").exists()
-    for filename, _ in SPECS.values():
-        assert "/v1/schemes/report" not in load(filename)["paths"]

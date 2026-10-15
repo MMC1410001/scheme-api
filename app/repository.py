@@ -35,29 +35,6 @@ class Repository:
             (dealer_code, year, month, list(COMPONENTS)),
         )
 
-# --- API 2 is on hold (2026-10-15): the report queries. Uncomment to restore. ---
-#     def latest_report(self) -> dict[str, Any] | None:
-#         # Same choice as the cron job: newest period folder, then highest _v<N>, then newest upload.
-#         rows = self._fetch_all(
-#             """
-#             SELECT id, gcs_path, year, month, version, columns
-#             FROM ingested_files
-#             WHERE kind = 'report'
-#             ORDER BY COALESCE(year, 0) DESC, COALESCE(month, 0) DESC,
-#                      COALESCE(version, 0) DESC, source_updated_at DESC
-#             LIMIT 1
-#             """
-#         )
-#         return rows[0] if rows else None
-#
-#     def report_rows(self, report: dict[str, Any], dealer_code: str) -> list[dict[str, Any]]:
-#         rows = self._fetch_all(
-#             "SELECT cells FROM report_rows WHERE file_id = %s AND dealer_code = %s ORDER BY id",
-#             (report["id"], dealer_code),
-#         )
-#         columns = report["columns"]
-#         return [dict(zip(columns, row["cells"])) for row in rows]
-
 
 async def get_repository() -> Repository:
     return Repository(get_pool())

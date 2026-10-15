@@ -5,7 +5,6 @@
     python -m ingestion.run schemes --year 2026 --month 9
     python -m ingestion.run schemes --year 2026 --month 9 --reload   # re-read files already loaded
     python -m ingestion.run schemes --year 2026 --month 9 --limit 5  # at most 5 new files (testing)
-    # python -m ingestion.run reports                  # load generated reports (API 2, on hold)
 """
 import argparse
 import logging
@@ -30,8 +29,6 @@ from ingestion.excel import read_rows
 from ingestion.load import is_loaded, save_scheme_file
 from ingestion.schemes import check_columns, to_record
 from ingestion.sources import SourceFile, list_files, month_prefixes
-# API 2 is on hold: the report loader below also needs normalize_dealer_code, read_table,
-# save_report_file, clean_value and report_period; re-import them to restore it.
 
 log = logging.getLogger("ingestion")
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "sql" / "001_init.sql"
@@ -162,66 +159,6 @@ def prefetched(pool: ThreadPoolExecutor, items: Iterable, work: Callable, ahead:
 _END = object()
 
 
-# --- API 2 is on hold (2026-10-15): the report loader (`reports` command). Uncomment to restore. ---
-# def load_reports(conn: psycopg.Connection) -> Counter:
-#     """Load the latest report if it isn't loaded yet; API 2 only ever serves the latest one.
-#
-#     Latest = newest <year>/<month> folder, then highest _v<N> in the file name, then newest upload.
-#     Older reports are not loaded (each takes about two minutes), so a first run loads one file.
-#     """
-#     settings = get_settings()
-#     stats: Counter = Counter()
-#     files = list_files(settings.report_prefix)
-#     if not files:
-#         log.warning("No report files in %s", settings.report_prefix)
-#         return stats
-#     file = max(files, key=_report_rank)
-#     period = report_period(file.path)
-#     stats["files_older"] = len(files) - 1
-#     if is_loaded(conn, "report", file):
-#         log.info("Latest report %s is already loaded", file.path)
-#         stats["files_skipped"] += 1
-#         return stats
-#     if period.year is None:
-#         log.warning("%s is not in a <year>/<month>/ folder", file.path)
-#     try:
-#         log.info("Reading %s", file.path)
-#         columns, rows = read_table(file.read(), file.path, settings.report_header_rows)
-#         dealer_index = _report_dealer_index(columns, settings.report_dealer_column)
-#
-#         def records():
-#             for row in rows:
-#                 dealer_code = normalize_dealer_code(row[dealer_index])
-#                 if dealer_code:
-#                     yield dealer_code, [clean_value(v) for v in row]
-#                 else:
-#                     stats["rows_bad"] += 1
-#
-#         count = save_report_file(conn, file, period.year, period.month, period.version, columns, records())
-#     except psycopg.OperationalError:
-#         raise  # connection lost: main() reconnects and resumes
-#     except Exception:
-#         log.exception("Failed to load %s", file.path)
-#         stats["files_failed"] += 1
-#         return stats
-#     stats["files_loaded"] += 1
-#     stats["rows_loaded"] += count
-#     return stats
-#
-#
-# def _report_rank(file: SourceFile) -> tuple:
-#     period = report_period(file.path)
-#     return (period.year or 0, period.month or 0, period.version or 0, file.updated_at)
-#
-#
-# def _report_dealer_index(columns: list[str], dealer_column: str) -> int:
-#     if not columns:
-#         raise ValueError("File has no header rows")
-#     if dealer_column not in columns:
-#         raise ValueError(f"No {dealer_column!r} column. First columns in file: {columns[:10]}")
-#     return columns.index(dealer_column)
-
-
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Load Scheme files from GCS into Postgres.")
@@ -232,7 +169,6 @@ def main(argv: list[str] | None = None) -> int:
     schemes.add_argument("--month", type=int)
     schemes.add_argument("--reload", action="store_true", help="re-read files that are already loaded")
     schemes.add_argument("--limit", type=positive_int, help="load at most this many new files (for testing)")
-    # commands.add_parser("reports", help="load generated period reports")  # API 2 is on hold (2026-10-15)
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -263,8 +199,6 @@ def main(argv: list[str] | None = None) -> int:
                     if limit is None or limit > 0:
                         load_schemes(conn, args.year or today.year, args.month or today.month,
                                      args.reload, limit, stats, done)
-                # else:  # API 2 is on hold (2026-10-15)
-                #     stats += load_reports(conn)
             break
         except psycopg.OperationalError as exc:
             if attempt == RECONNECT_ATTEMPTS:

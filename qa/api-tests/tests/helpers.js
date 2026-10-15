@@ -4,7 +4,7 @@
 //   API_BASE_URL   default http://localhost:8000
 //   API_KEY        sent as X-API-Key (needed when the server has API_KEY set)
 //   AUTH_ENABLED   "true" when the server requires an API key (enables the auth _SEC cases)
-//   DEALER_CODE    a dealer with data this month and in the latest report (default: sample dealer 6100000001)
+//   DEALER_CODE    a dealer with data this month (default: sample dealer 6100000001)
 //   SAMPLE_DATA    "true" (default) when the server holds scripts/make_sample_data.py data;
 //                  set "false" on real environments to skip the cases that assert sample values
 //   MONTH, YEAR    month sent to API 1 (default: the current month in India time, where the
@@ -25,7 +25,6 @@ const MONTH = {
   month: Number(process.env.MONTH || nowInIndia.getMonth() + 1),
   year: Number(process.env.YEAR || nowInIndia.getFullYear()),
 };
-const API2 = '/v1/schemes/report';
 const LEAK_MARKERS = ['Traceback', '.py"', 'psycopg', 'SELECT ', 'syntax error', 'ORA-', 'PG::', '"input"'];
 
 function newApi(playwright, headers = API_KEY ? { 'X-API-Key': API_KEY } : {}) {
@@ -52,9 +51,9 @@ async function expectValidationError(response, payload) {
   for (const marker of LEAK_MARKERS) expect(text).not.toContain(marker);
 }
 
-// The request rules both APIs share (body {"dealer_code": ...}, API key, limits, headers).
+// The request rules of the API (body {"dealer_code": ...}, API key, limits, headers).
 // Registers the same edge, negative and security cases for one endpoint, numbered from `start`:
-// <prefix>_TC_<n> (and _SEC for security), so API 1 and API 2 each report their own results.
+// <prefix>_TC_<n> (and _SEC for security), so each endpoint reports its own results.
 // `baseBody` holds the other required fields (API 1: month and year); every JSON body includes it.
 function registerRequestContract({ prefix, path, start, baseBody = {} }) {
   let n = start;
@@ -291,5 +290,5 @@ function registerRequestContract({ prefix, path, start, baseBody = {} }) {
 
 module.exports = {
   test, expect, API_KEY, AUTH_ENABLED, SAMPLE_DATA, DEALER, NEGATIVE_DEALER, UNKNOWN_DEALER, BASE_URL,
-  API1, API2, MONTH, newApi, useClient, expectValidationError, registerRequestContract,
+  API1, MONTH, newApi, useClient, expectValidationError, registerRequestContract,
 };

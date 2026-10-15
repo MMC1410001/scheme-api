@@ -39,15 +39,12 @@ class Settings(BaseSettings):
     # Optional Google Cloud project ID for the GCS client (not needed just to read the bucket).
     gcs_project: str | None = None
     scheme_prefix_template: str = "sap-exports/{year}/{month:02d}/"
-    report_prefix: str = "automated-generated-files/output/"
     # Read files from this local folder instead of GCS (development only).
     local_data_dir: str | None = None
 
     scheme_header_rows: int = 1
     # Files the loader downloads and parses ahead, in parallel, while it saves the current one.
     loader_workers: int = 4
-    report_header_rows: int = 2
-    report_dealer_column: str = "customer"
 
 
 @lru_cache

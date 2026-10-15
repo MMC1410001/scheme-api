@@ -5,16 +5,12 @@
 
 Scheme files mimic the SAP export (one CSV per day, only that day's updated rows).
 Day 2 updates dealer 6100000001's LUXURY row, so API 1 should show the day-2 numbers.
-Reports (API 2) mimic the generator's grouped workbook; v2 should be served, not v1.
 """
 import argparse
 import csv
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
-import openpyxl
-import openpyxl.utils
 
 ROOT = Path(__file__).resolve().parent.parent / "local_data"
 today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
@@ -101,61 +97,3 @@ write_csv(DAY1, day1)
 write_csv(DAY2, day2)
 if args.perf_dealers:
     write_perf_files(args.perf_dealers)
-
-# API 2: reports in the generator's layout (made-up values): a group row merged over each
-# group's columns, a column-name row, one row per dealer. v1 and v2 are written so the
-# API can be checked to serve the highest version (v2 has GSR(Q) Value 125000.5 for 6100000001).
-REPORT_GROUPS = [
-    ("Value Slab", ["GSR(Q) Value", "GSR(B) Value", "Value CN%", "Value Clear Cut", "Short Fall Value",
-                    "Short Fall % Value"]),
-    ("Early Bird", ["GSR(Q) EB 1", "GSR(B) EB 1", "EB 1 CN%", "Short Fall EB 1", "Clear Cut"]),
-    ("Luxury", ["Volume Q Luxury", "Luxury CN%", "Clear Cut"]),
-]
-REPORT_FIXED = ["Zone", "Region", "Depot Code", "Customer", "Customer Name"]
-
-
-def report_row(customer, name, gsr_q):
-    # 0.4000000059604645 and 66.86000061035156 are how the generator's 32-bit floats arrive;
-    # the loader turns them back into 0.4 and 66.86. None is an empty cell.
-    return [
-        "Central", "Bihar North", "1302", customer, name,
-        gsr_q, gsr_q, 0.4000000059604645, 0, 33431.359375, 66.86000061035156,
-        336479.875, 336479.875, 0.75, 0, None,
-        315, 1.0, 1592.93,
-    ]
-
-
-def write_report(version: int, rows) -> None:
-    book = openpyxl.Workbook()
-    sheet = book.active
-    sheet.title = "Output"
-    groups, names, col = list(REPORT_FIXED), [None] * len(REPORT_FIXED), len(REPORT_FIXED) + 1
-    merges = [f"{openpyxl.utils.get_column_letter(c)}1:{openpyxl.utils.get_column_letter(c)}2"
-              for c in range(1, col)]
-    for group, columns in REPORT_GROUPS:
-        groups += [group] + [None] * (len(columns) - 1)
-        names += columns
-        merges.append(f"{openpyxl.utils.get_column_letter(col)}1:"
-                      f"{openpyxl.utils.get_column_letter(col + len(columns) - 1)}1")
-        col += len(columns)
-    sheet.append(groups)
-    sheet.append(names)
-    for cells in rows:
-        sheet.append(cells)
-    for cells in merges:
-        sheet.merge_cells(cells)
-    month_name = today.strftime("%B")
-    folder = ROOT / f"automated-generated-files/output/{today.year}/{today.month:02d}"
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / (f"automated-generated-files_output_{today.year}_{today.month:02d}_output_"
-                     f"{month_name}_{today.year}_grouped_v{version}.xlsx")
-    book.save(path)
-    print("wrote", path.relative_to(ROOT.parent))
-
-
-perf_report_rows = [report_row(f"62{n:08d}", f"Perf Dealer {n}", float((n * 37) % 900000 + 100))
-                    for n in range(1, args.perf_dealers + 1)]
-write_report(1, [report_row("6100000001", "Sample Paints", 120000.0),
-                 report_row("6100000002", "Om Traders", -882.0)])
-write_report(2, [report_row("6100000001", "Sample Paints", 125000.5),
-                 report_row("6100000002", "Om Traders", -882.0), *perf_report_rows])

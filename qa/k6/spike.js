@@ -3,7 +3,7 @@
 //   k6 run spike.js
 //   SPIKE_VUS=1000 k6 run spike.js
 import { thresholds, summaryTrendStats, summaryTo } from './config.js';
-import { mixedTraffic } from './traffic.js';
+import { userIteration } from './traffic.js';
 
 const BASE = parseInt(__ENV.BASE_VUS || '20');
 const SPIKE = parseInt(__ENV.SPIKE_VUS || '500');
@@ -28,5 +28,5 @@ export const options = {
   summaryTrendStats,
 };
 
-export default mixedTraffic;
+export default userIteration;
 export const handleSummary = summaryTo('spike');

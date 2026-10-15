@@ -183,7 +183,7 @@ test.describe('API 1 - Monthly schemes', () => {
   });
 
   // ===========================================================================
-  // EDGE, NEGATIVE, SECURITY — API1_TC_26 onwards (same rules as API 2; see helpers.js)
+  // EDGE, NEGATIVE, SECURITY — API1_TC_26 onwards (see helpers.js)
   // ===========================================================================
   registerRequestContract({ prefix: 'API1', path: API1, start: 26, baseBody: MONTH });
 });

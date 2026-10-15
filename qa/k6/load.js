@@ -3,7 +3,7 @@
 //   k6 run load.js
 //   TARGET_VUS=300 HOLD=10m k6 run load.js
 import { thresholds, summaryTrendStats, summaryTo } from './config.js';
-import { mixedTraffic } from './traffic.js';
+import { userIteration } from './traffic.js';
 
 const TARGET = parseInt(__ENV.TARGET_VUS || '150');
 
@@ -24,5 +24,5 @@ export const options = {
   summaryTrendStats,
 };
 
-export default mixedTraffic;
+export default userIteration;
 export const handleSummary = summaryTo('load');

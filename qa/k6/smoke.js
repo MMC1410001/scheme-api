@@ -3,7 +3,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { BASE_URL, thresholds, summaryTrendStats, summaryTo } from './config.js';
-import { mixedTraffic } from './traffic.js';
+import { userIteration } from './traffic.js';
 
 export const options = {
   vus: 1,
@@ -19,5 +19,5 @@ export function setup() {
   }
 }
 
-export default mixedTraffic;
+export default userIteration;
 export const handleSummary = summaryTo('smoke');

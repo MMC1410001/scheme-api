@@ -1,8 +1,7 @@
-"""Build the Postman collections (one per API) and the environments in this folder.
+"""Build the API 1 Postman collection and the environments in this folder.
 
     Scheme_API1_Current_Month.postman_collection.json   API 1
-    (Scheme_API2_Report.postman_collection.json         API 2 - on hold, not generated)
-    Local / Dev .postman_environment.json                      shared by both collections
+    Local / Dev .postman_environment.json                      environments
 
 Edit requests and tests here, not in the JSON, then regenerate the JSON files:
     python3 qa/postman/build_collection.py
@@ -13,7 +12,6 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
 API1 = "{{baseUrl}}/v1/schemes/current-month"
-API2 = "{{baseUrl}}/v1/schemes/report"
 COMPONENTS = ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE", "LUXURY", "PREMIUM 01", "PREMIUM 02", "EB FULL MONTH"]
 
 def script(lines):
@@ -123,47 +121,6 @@ api1_month_negative = [
     req("Boolean month -> 422", "POST", API1, {"dealer_code": "{{dealerCode}}", "month": True, "year": "{{year}}"}, tests=[status(422)]),
 ]
 
-sample_only = 'if (pm.environment.get("sampleData") !== "true") { pm.test("SKIPPED: needs sample data (sampleData=false)", () => {}); return; }'
-API2_ROW_CHECKS = [
-    status(200), is_array,
-    'const rows = pm.response.json();',
-    'pm.test("Exactly one row for the dealer (needs a report loaded)", () => pm.expect(rows.length).to.eql(1));',
-    'const row = rows[0] || {};',
-    'pm.test("customer matches the requested dealer", () => pm.expect(row.customer).to.eql(pm.environment.get("dealerCode")));',
-    'pm.test("Columns start with zone, region, depot_code, customer, customer_name", () => pm.expect(Object.keys(row).slice(0, 5)).to.eql(["zone","region","depot_code","customer","customer_name"]));',
-    'pm.test("Every key is snake_case", () => Object.keys(row).forEach(k => pm.expect(k).to.match(/^[a-z0-9]+(_[a-z0-9]+)*$/)));',
-    'pm.test("Values are numbers, strings or null", () => Object.entries(row).forEach(([k, v]) => pm.expect(v === null || ["number","string"].includes(typeof v), k).to.be.true));',
-    'pm.test("No float32 noise in numbers", () => Object.entries(row).forEach(([k, v]) => { if (typeof v === "number" && !Number.isInteger(v)) pm.expect(v === Number(v.toPrecision(7)) || v === Number(v.toFixed(2)), k + " = " + v).to.be.true; }));',
-    'pm.collectionVariables.set("api2Row", JSON.stringify(rows));',
-    '(function () {', sample_only,
-    'pm.test("[sample data] v2 of the latest month is served (125000.5, not v1\'s 120000)", () => pm.expect(row.value_slab_gsr_q_value).to.eql(125000.5));',
-    'pm.test("[sample data] float32 noise removed: 0.4 and 66.86", () => { pm.expect(row.value_slab_value_cn_pct).to.eql(0.4); pm.expect(row.value_slab_short_fall_pct_value).to.eql(66.86); });',
-    'pm.test("[sample data] Empty cell is null", () => pm.expect(row.early_bird_clear_cut).to.eql(null));',
-    '})();',
-]
-SAME_AS_API2 = 'pm.test("Same body as the string request", () => pm.expect(JSON.stringify(pm.response.json())).to.eql(pm.collectionVariables.get("api2Row")));'
-SAMPLE_REPORT_ROW = {
-    "zone": "Central", "region": "Bihar North", "depot_code": "1302", "customer": "6100000001",
-    "customer_name": "Sample Paints", "value_slab_gsr_q_value": 125000.5, "value_slab_gsr_b_value": 125000.5,
-    "value_slab_value_cn_pct": 0.4, "value_slab_value_clear_cut": 0, "value_slab_short_fall_value": 33431.36,
-    "value_slab_short_fall_pct_value": 66.86, "early_bird_gsr_q_eb_1": 336479.88, "early_bird_clear_cut": None,
-    "luxury_clear_cut": 1592.93,
-}
-api2 = [
-    req("Dealer report - dealer code as string", "POST", API2, {"dealer_code": "{{dealerCode}}"}, API2_ROW_CHECKS,
-        description=("The dealer's row from the latest generated report (newest month folder, then highest _v<N>). "
-                     "Keys are the report's two header rows joined and snake_cased, in file order; empty cells are null. "
-                     "The real report has ~870 columns; the example shows a few."),
-        examples=[example("200 - the dealer's row (columns shortened)", "OK", 200, [SAMPLE_REPORT_ROW], {"dealer_code": "6100000001"}, API2),
-                  example("200 - dealer not in the report", "OK", 200, [], {"dealer_code": "6199999999"}, API2)]),
-    req("Dealer report - dealer code as number", "POST", API2, raw_body='{\n  "dealer_code": {{dealerCode}}\n}',
-        tests=[status(200), SAME_AS_API2], description="The code may be sent as a JSON number."),
-    req("Dealer report - leading zeros ignored", "POST", API2, {"dealer_code": "000{{dealerCode}}"},
-        tests=[status(200), SAME_AS_API2], description="0006100000001 and 6100000001 are the same dealer."),
-    req("Dealer report - unknown dealer returns []", "POST", API2, {"dealer_code": "{{unknownDealerCode}}"},
-        tests=[status(200), empty_array]),
-]
-
 
 def validation(url, name, body=None, raw=None, echoed=None, desc=""):
     return req(name, "POST", url, body, raw_body=raw, description=desc,
@@ -251,11 +208,6 @@ COLLECTIONS = {
         "Monthly schemes", api1, API1,
         [{"key": "api1RowCount", "value": ""}, {"key": "month", "value": ""}, {"key": "year", "value": ""}],
         base=MONTH_VARS, extra_negative=api1_month_negative, prerequest=CURRENT_MONTH_SCRIPT),
-    # API 2 is on hold (2026-10-15): its collection is not generated. Uncomment (and the endpoint) to restore.
-    # "Scheme_API2_Report.postman_collection.json": collection(
-    #     "collection-api2", "Scheme API 2 - Dealer report",
-    #     "API 2: POST /v1/schemes/report returns the dealer's row from the latest generated report.",
-    #     "Dealer report", api2, API2, [{"key": "api2Row", "value": ""}]),
 }
 for filename, data in COLLECTIONS.items():
     (OUT / filename).write_text(json.dumps(data, indent=2) + "\n")
@@ -271,4 +223,4 @@ def env(name, base, key, auth, dealer, sample):
     ]}
 (OUT / "Local.postman_environment.json").write_text(json.dumps(env("Scheme API - Local", "http://localhost:8000", "local-test-key", "true", "6100000001", "true"), indent=2) + "\n")
 (OUT / "Dev.postman_environment.json").write_text(json.dumps(env("Scheme API - Dev", "https://<dev-host-to-be-confirmed>", "", "false", "<a real dealer code>", "false"), indent=2) + "\n")
-print("wrote", OUT.name + "/: API 1 collection + Local and Dev environments (API 2 on hold)")
+print("wrote", OUT.name + "/: API 1 collection + Local and Dev environments")
