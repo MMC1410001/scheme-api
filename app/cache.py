@@ -18,7 +18,7 @@ import redis
 
 log = logging.getLogger("app.cache")
 
-KEY_PREFIX = "acme:v1"
+KEY_PREFIX = "acme:v2"  # bump when the response shape changes (v2: NextSlabRate), so old bodies are never served
 VERSION_KEY = "acme:data-version"
 TIMEOUT_SECONDS = 0.25
 RETRY_AFTER_SECONDS = 30.0

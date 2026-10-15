@@ -16,7 +16,7 @@ import pytest
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ingestion.load import SCHEME_FIELDS, SCHEME_KEY, save_scheme_file
+from ingestion.load import SCHEME_FIELDS, SCHEME_KEY, is_loaded, save_scheme_file
 from ingestion.run import take_loader_lock
 from ingestion.sources import SourceFile
 
@@ -29,14 +29,15 @@ SCHEMA_SQL = (Path(__file__).resolve().parent.parent / "sql" / "001_init.sql").r
 ROW_BY_ROW = """
 INSERT INTO scheme_records (year, month, dealer_code, agreement, deal_suffix, component, valid_from,
     valid_to, qualification_basis, qualification, gsr_b, rebate_rate, clear_cut, shortfall_amount,
-    shortfall_pct, last_updated_at, source_file, raw)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (year, month, dealer_code, agreement, deal_suffix) DO UPDATE SET
+    shortfall_pct, next_slab_rate, last_updated_at, source_file, raw)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (year, month, dealer_code, agreement, deal_suffix,
+             (coalesce(valid_from, '-infinity'::date)), (coalesce(valid_to, '-infinity'::date))) DO UPDATE SET
     component = EXCLUDED.component, valid_from = EXCLUDED.valid_from, valid_to = EXCLUDED.valid_to,
     qualification_basis = EXCLUDED.qualification_basis, qualification = EXCLUDED.qualification,
     gsr_b = EXCLUDED.gsr_b, rebate_rate = EXCLUDED.rebate_rate, clear_cut = EXCLUDED.clear_cut,
     shortfall_amount = EXCLUDED.shortfall_amount, shortfall_pct = EXCLUDED.shortfall_pct,
-    last_updated_at = EXCLUDED.last_updated_at, source_file = EXCLUDED.source_file, raw = EXCLUDED.raw
+    next_slab_rate = EXCLUDED.next_slab_rate, last_updated_at = EXCLUDED.last_updated_at, source_file = EXCLUDED.source_file, raw = EXCLUDED.raw
 WHERE EXCLUDED.last_updated_at >= scheme_records.last_updated_at
 """
 
@@ -67,10 +68,13 @@ def record(rng, n, dealer, deal_suffix, minute):
     return {
         "year": 2026, "month": 9, "dealer_code": dealer, "agreement": "200002155", "deal_suffix": deal_suffix,
         "component": rng.choice(["EB SLAB 1", "VALUE", "LUXURY", "EB FULL MONTH"]),
-        "valid_from": date(2026, 9, 1), "valid_to": date(2026, 9, rng.randint(1, 30)),
+        # few periods, some without dates, so the same agreement and suffix appears with several periods
+        "valid_from": rng.choice([date(2026, 8, 1), date(2026, 9, 1), None]),
+        "valid_to": rng.choice([date(2026, 8, 31), date(2026, 9, 30), None]),
         "qualification_basis": "GSR", "qualification": Decimal(rng.randint(-1000, 100000)) / 100,
         "gsr_b": Decimal(n), "rebate_rate": None, "clear_cut": Decimal("0.00"),
         "shortfall_amount": Decimal("1.5"), "shortfall_pct": Decimal(rng.randint(0, 100)),
+        "next_slab_rate": Decimal(rng.randint(0, 300)) / 100,
         "last_updated_at": datetime(2026, 9, 20, 3, minute), "source_file": f"f{n}.csv",
         "raw": {"row": n, "note": "ünïcode, comma, \"quote\"\ttab\nnewline"},
     }
@@ -113,7 +117,9 @@ def stage_exists(conn):
 def test_staging_table_is_gone_after_each_file(schemas):
     _, bulk = schemas
     rng = random.Random(0)
-    save_scheme_file(bulk, source(1), 2026, 9, [record(rng, i, "6100000001", "42", 0) for i in range(3)])
+    same_key = [{**record(rng, i, "6100000001", "42", 0), "valid_from": date(2026, 9, 1), "valid_to": date(2026, 9, 30)}
+                for i in range(3)]
+    save_scheme_file(bulk, source(1), 2026, 9, same_key)
     assert not stage_exists(bulk)
     assert bulk.execute("SELECT count(*) AS n FROM scheme_records").fetchone()["n"] == 1  # same key 3 times
 
@@ -204,3 +210,130 @@ def test_a_permanent_table_named_like_the_stage_is_never_used(schemas):
     save_scheme_file(bulk, source(1), 2026, 9, [record(random.Random(0), 1, "6100000001", "42", 0)])
     assert bulk.execute(f'SELECT x FROM "{schema}".scheme_stage').fetchall() == [{"x": 99}]
     assert bulk.execute("SELECT count(*) AS n FROM scheme_records").fetchone()["n"] == 1
+
+
+def test_upgrade_adds_next_slab_rate_and_fills_it_from_the_stored_sap_row(schemas):
+    conn, _ = schemas
+    conn.execute("ALTER TABLE scheme_records DROP COLUMN next_slab_rate")  # a table from before the column
+    values = {"1": " 0.75 ", "2": "1.25-", "3": "1,000.50", "4": "", "5": None}
+    for suffix, value in values.items():
+        raw = {"comp_desc": "LUXURY"} if value is None else {"next_slab_rate": value}
+        conn.execute(
+            """INSERT INTO scheme_records (year, month, dealer_code, agreement, deal_suffix, component,
+                   qualification_basis, last_updated_at, source_file, raw)
+               VALUES (2026, 9, '6100000001', '200002155', %s, 'LUXURY', 'INVOICE_QTY', now(), 'f.csv', %s)""",
+            (suffix, Jsonb(raw)),
+        )
+    for valid_from, value in ((date(2026, 8, 1), "0.5"), (date(2026, 9, 1), "0.9")):  # two periods, one old key
+        conn.execute(
+            """INSERT INTO scheme_records (year, month, dealer_code, agreement, deal_suffix, component, valid_from,
+                   qualification_basis, last_updated_at, source_file, raw)
+               VALUES (2026, 9, '6100000001', '200002155', '6', 'LUXURY', %s, 'INVOICE_QTY', now(), 'f.csv', %s)""",
+            (valid_from, Jsonb({"next_slab_rate": value})),
+        )
+    conn.execute(SCHEMA_SQL)
+    conn.execute(SCHEMA_SQL)  # running it again changes nothing
+    rows = conn.execute("SELECT deal_suffix, valid_from, next_slab_rate FROM scheme_records").fetchall()
+    assert {(r["deal_suffix"], r["valid_from"]): r["next_slab_rate"] for r in rows} == {
+        ("1", None): Decimal("0.75"), ("2", None): Decimal("-1.25"), ("3", None): Decimal("1000.50"),
+        ("4", None): None, ("5", None): None,
+        ("6", date(2026, 8, 1)): Decimal("0.5"), ("6", date(2026, 9, 1)): Decimal("0.9"),
+    }
+
+
+def period(rng, n, valid_from, valid_to, minute=0, dealer="6100000001"):
+    return {**record(rng, n, dealer, "42", minute), "valid_from": valid_from, "valid_to": valid_to}
+
+
+def stored(conn):
+    return conn.execute("SELECT valid_from, valid_to, gsr_b FROM scheme_records ORDER BY valid_from NULLS FIRST").fetchall()
+
+
+def test_two_periods_of_one_agreement_in_one_folder_are_both_kept(schemas):
+    """The September folder holds a late update of August's scheme and September's, same agreement and suffix."""
+    _, bulk = schemas
+    rng = random.Random(0)
+    aug, sep = (date(2026, 8, 1), date(2026, 8, 31)), (date(2026, 9, 1), date(2026, 9, 30))
+    save_scheme_file(bulk, source(1), 2026, 9, [period(rng, 1, *aug), period(rng, 2, *sep)])
+    assert [r["gsr_b"] for r in stored(bulk)] == [1, 2]
+    save_scheme_file(bulk, source(2), 2026, 9, [period(rng, 3, *aug, minute=5)])  # newer August update
+    assert [r["gsr_b"] for r in stored(bulk)] == [3, 2]  # replaces August only
+    save_scheme_file(bulk, source(3), 2026, 9, [period(rng, 4, *sep, minute=0)])  # same time as stored: wins
+    save_scheme_file(bulk, source(4), 2026, 9, [period(rng, 5, *sep)])
+    assert [r["gsr_b"] for r in stored(bulk)] == [3, 5]
+
+
+@pytest.mark.parametrize("dates", [(None, None), (date(2026, 9, 1), None), (None, date(2026, 9, 30))])
+def test_rows_with_empty_dates_are_still_one_row(schemas, dates):
+    _, bulk = schemas
+    rng = random.Random(0)
+    save_scheme_file(bulk, source(1), 2026, 9, [period(rng, 1, *dates), period(rng, 2, *dates, minute=1)])
+    save_scheme_file(bulk, source(2), 2026, 9, [period(rng, 3, *dates, minute=0)])  # older: ignored
+    assert [r["gsr_b"] for r in stored(bulk)] == [2]
+
+
+def test_a_file_with_bad_rows_is_recorded_as_failed_and_not_retried(schemas):
+    _, bulk = schemas
+    rng = random.Random(0)
+    save_scheme_file(bulk, source(1), 2026, 9, [period(rng, 1, date(2026, 9, 1), date(2026, 9, 30))], rows_bad=2)
+    entry = bulk.execute("SELECT status, rows_bad, row_count FROM ingested_files").fetchone()
+    assert entry == {"status": "failed", "rows_bad": 2, "row_count": 1}
+    assert bulk.execute("SELECT count(*) AS n FROM scheme_records").fetchone()["n"] == 1  # good rows are kept
+    assert is_loaded(bulk, "scheme", source(1))  # same file version: not read again
+    save_scheme_file(bulk, source(1), 2026, 9, [period(rng, 1, date(2026, 9, 1), date(2026, 9, 30))])  # --reload, clean
+    assert bulk.execute("SELECT status, rows_bad FROM ingested_files").fetchone() == {"status": "loaded", "rows_bad": 0}
+
+
+# The tables as they were before the dates joined the key and files got a status.
+OLD_SCHEMA = """
+CREATE TABLE ingested_files (
+    id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL CHECK (kind = 'scheme'), gcs_path TEXT NOT NULL,
+    generation TEXT NOT NULL, source_updated_at TIMESTAMPTZ NOT NULL, year INT, month INT,
+    row_count INT NOT NULL DEFAULT 0, loaded_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (kind, gcs_path)
+);
+CREATE TABLE scheme_records (
+    year INT NOT NULL, month INT NOT NULL, dealer_code TEXT NOT NULL, agreement TEXT NOT NULL,
+    deal_suffix TEXT NOT NULL,
+    component TEXT NOT NULL CHECK (component IN ('EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE',
+                                                 'LUXURY', 'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH')),
+    valid_from DATE, valid_to DATE,
+    qualification_basis TEXT NOT NULL CHECK (qualification_basis IN ('GSR', 'INVOICE_QTY')),
+    qualification NUMERIC, gsr_b NUMERIC, rebate_rate NUMERIC, clear_cut NUMERIC, shortfall_amount NUMERIC,
+    shortfall_pct NUMERIC, next_slab_rate NUMERIC, last_updated_at TIMESTAMP NOT NULL, source_file TEXT NOT NULL,
+    raw JSONB NOT NULL,
+    PRIMARY KEY (year, month, dealer_code, agreement, deal_suffix)
+);
+"""
+
+
+def test_upgrade_from_the_key_without_dates(schemas):
+    conn, _ = schemas
+    schema = conn.execute("SELECT current_schema() AS s").fetchone()["s"]
+    conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    conn.execute(f'CREATE SCHEMA "{schema}"')
+    conn.execute(OLD_SCHEMA)
+    rng = random.Random(0)
+    old_row = period(rng, 1, date(2026, 8, 1), date(2026, 8, 31))
+    conn.execute(f"INSERT INTO scheme_records ({', '.join(SCHEME_FIELDS)}) VALUES ({', '.join(['%s'] * len(SCHEME_FIELDS))})",
+                 [Jsonb(old_row[f]) if f == "raw" else old_row[f] for f in SCHEME_FIELDS])
+    conn.execute("INSERT INTO ingested_files (kind, gcs_path, generation, source_updated_at) VALUES ('scheme', 'old.csv', '1', now())")
+
+    conn.execute(SCHEMA_SQL)
+    conn.execute(SCHEMA_SQL)  # running it again changes nothing
+
+    assert conn.execute("SELECT count(*) AS n FROM pg_constraint WHERE conrelid = 'scheme_records'::regclass AND contype = 'p'"
+                        ).fetchone()["n"] == 0
+    assert conn.execute("SELECT to_regclass('scheme_records_key') IS NOT NULL AS e").fetchone()["e"]
+    assert conn.execute("SELECT status, rows_bad FROM ingested_files").fetchone() == {"status": "loaded", "rows_bad": 0}
+    save_scheme_file(conn, source(1), 2026, 9, [period(rng, 2, date(2026, 9, 1), date(2026, 9, 30))])  # same old key
+    assert [r["gsr_b"] for r in stored(conn)] == [1, 2]
+
+
+def test_running_the_schema_again_adds_no_constraints(schemas):
+    # Before PostgreSQL 13, ADD COLUMN IF NOT EXISTS ... CHECK added the CHECK again on every run.
+    conn, _ = schemas
+    count = "SELECT count(*) AS n FROM pg_constraint WHERE conrelid IN ('ingested_files'::regclass, 'scheme_records'::regclass)"
+    before = conn.execute(count).fetchone()["n"]
+    for _ in range(3):
+        conn.execute(SCHEMA_SQL)
+    assert conn.execute(count).fetchone()["n"] == before

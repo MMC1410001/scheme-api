@@ -28,6 +28,7 @@ def no_wait(monkeypatch):
     monkeypatch.setattr(run, "RECONNECT_WAIT_SECONDS", 0)
     monkeypatch.setattr(run.psycopg, "connect", connect)
     monkeypatch.setattr(run, "take_loader_lock", lambda *a, **k: True)
+    monkeypatch.setattr(run, "ensure_schema", lambda conn: None)
 
 
 def test_schemes_reconnects_and_resumes_after_connection_loss(monkeypatch, no_wait):
@@ -134,7 +135,7 @@ def fake_month(monkeypatch):
     monkeypatch.setattr(run, "list_files", lambda prefix: files)
     monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: f.path in loaded)
 
-    def parse(content, path, year, month_, header_rows):
+    def parse(content, path, year, month_, header_rows, log_rows=True):
         with lock:
             month["parsed"].append(content.decode())
             month["running"] += 1
@@ -147,7 +148,8 @@ def fake_month(monkeypatch):
         return [{"file": content.decode()}] * 2, Counter(rows_other_components=1)
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
-    monkeypatch.setattr(run, "save_scheme_file", lambda conn, f, y, m, records: month["saved"].append(f.path.rsplit("/", 1)[1]))
+    monkeypatch.setattr(run, "save_scheme_file",
+                        lambda conn, f, y, m, records, rows_bad=0: month["saved"].append(f.path.rsplit("/", 1)[1]))
     return month
 
 
@@ -192,7 +194,7 @@ def test_zero_workers_still_loads(fake_month, monkeypatch):
 def test_lost_connection_stops_without_reading_further_files(fake_month, monkeypatch):
     workers(monkeypatch, 1)
 
-    def save(conn, f, y, m, records):
+    def save(conn, f, y, m, records, rows_bad=0):
         raise psycopg.OperationalError("the connection is closed")
 
     monkeypatch.setattr(run, "save_scheme_file", save)
@@ -236,11 +238,11 @@ def test_counts_are_right_after_a_reconnect(fake_month, monkeypatch):
     real_save = run.save_scheme_file
     lost = []
 
-    def save(conn, f, y, m, records):
+    def save(conn, f, y, m, records, rows_bad=0):
         if f.path.endswith("c.csv") and not lost:
             lost.append(f.path)
             raise psycopg.OperationalError("the connection is closed")
-        real_save(conn, f, y, m, records)
+        real_save(conn, f, y, m, records, rows_bad)
 
     monkeypatch.setattr(run, "save_scheme_file", save)
     stats, done = Counter(), set()
@@ -255,12 +257,12 @@ def test_lost_connection_does_not_wait_for_downloads_in_progress(fake_month, mon
     workers(monkeypatch, 1)
     real_parse = run.parse_scheme_file
 
-    def parse(content, path, year, month, header_rows):
+    def parse(content, path, year, month, header_rows, log_rows=True):
         if content == b"c":
             time.sleep(0.5)  # being prefetched while a is saved
-        return real_parse(content, path, year, month, header_rows)
+        return real_parse(content, path, year, month, header_rows, log_rows)
 
-    def save(conn, f, y, m, records):
+    def save(conn, f, y, m, records, rows_bad=0):
         raise psycopg.OperationalError("the connection is closed")
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
@@ -270,3 +272,84 @@ def test_lost_connection_does_not_wait_for_downloads_in_progress(fake_month, mon
         run.load_schemes(object(), 2026, 9)
     assert time.monotonic() - started < 0.4  # the reconnect is not held up by c's download
     time.sleep(0.6)
+
+
+@pytest.fixture
+def one_file(monkeypatch):
+    """One new file x; each download returns a new copy (b"copy1", b"copy2", ...) and parsing copy n
+    gives reads_bad[n - 1] bad rows; 3 good rows each time."""
+    state = {"downloads": 0, "reads": 0, "reads_bad": [], "saved": [], "parsed": []}
+
+    def download():
+        state["downloads"] += 1
+        return b"copy%d" % state["downloads"]
+
+    file = run.SourceFile(path="sap-exports/2026/09/x.csv", generation="1",
+                          updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc), read=download)
+    monkeypatch.setattr(run, "list_files", lambda prefix: [file])
+    monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
+
+    def parse(content, path, year, month, header_rows, log_rows=True):
+        state["parsed"].append((content, log_rows))
+        bad = state["reads_bad"][int(content.removeprefix(b"copy")) - 1]  # decided by the bytes read
+        state["reads"] += 1
+        return [{"row": n} for n in range(3)], Counter(rows_bad=bad) if bad else Counter()
+
+    monkeypatch.setattr(run, "parse_scheme_file", parse)
+    monkeypatch.setattr(run, "save_scheme_file",
+                        lambda conn, f, y, m, records, rows_bad=0: state["saved"].append((len(records), rows_bad)))
+    return state
+
+
+def test_a_file_with_bad_rows_is_read_again_and_loads_if_the_second_read_is_clean(one_file):
+    one_file["reads_bad"] = [2, 0]  # e.g. a damaged download the first time
+    stats = run.load_schemes(object(), 2026, 9)
+    assert one_file["downloads"] == 2  # downloaded again, not just parsed again
+    assert one_file["parsed"] == [(b"copy1", False), (b"copy2", True)]  # rows logged only from the kept read
+    assert one_file["saved"] == [(3, 0)]  # recorded as loaded
+    assert stats == Counter(files_loaded=1, rows_loaded=3)
+
+
+def test_a_file_still_bad_after_reading_it_again_keeps_its_good_rows_and_is_marked_failed(one_file, caplog):
+    one_file["reads_bad"] = [2, 2]
+    stats = run.load_schemes(object(), 2026, 9)
+    assert one_file["downloads"] == 2  # read once more, not more
+    assert one_file["parsed"] == [(b"copy1", False), (b"copy2", True)]
+    assert one_file["saved"] == [(3, 2)]  # good rows saved; rows_bad makes the file "failed"
+    assert stats == Counter(files_failed=1, rows_loaded=3, rows_bad=2)  # bad rows counted once, not per read
+    assert "marked failed" in caplog.text
+
+
+def test_a_clean_file_is_read_once(one_file):
+    one_file["reads_bad"] = [0]
+    run.load_schemes(object(), 2026, 9)
+    assert one_file["downloads"] == 1
+
+
+def test_good_rows_of_a_failed_file_refresh_the_cache_and_the_run_fails(monkeypatch, no_wait):
+    bumped = []
+
+    def load(conn, year, month, reload, limit, stats, done):
+        stats.update(files_failed=1, rows_loaded=3, rows_bad=2)
+
+    monkeypatch.setattr(run, "load_schemes", load)
+    monkeypatch.setattr(run, "bump_data_version", bumped.append)
+    monkeypatch.setattr(run, "get_settings",
+                        lambda: Settings(_env_file=None, cache_enabled=True, redis_url="redis://example"))
+    assert run.main(["schemes", "--year", "2026", "--month", "9"]) == 1
+    assert bumped == ["redis://example"]
+
+
+def test_each_bad_row_is_logged_once_even_when_the_file_is_read_twice(monkeypatch, caplog):
+    csv = (b"customer,agreement,deal_suffix,comp_desc,valid_from,to,gsr_q,invoiced_quantity_q,gsr_b,rebate_rate,"
+           b"clear_cut_cn,short_fall,short_fall_pct,next_slab_rate,last_updated_date,last_updated_time\n"
+           b"6100000001,A1,10,VALUE,01/09/2026,30/09/2026,1,,1,0,0,0,0,0,02/09/2026,10:00:00\n"
+           b"6100000001,A2,10,VALUE,not a date,30/09/2026,1,,1,0,0,0,0,0,02/09/2026,10:00:00\n")
+    file = run.SourceFile(path="sap-exports/2026/09/x.csv", generation="1",
+                          updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc), read=lambda: csv)
+    monkeypatch.setattr(run, "list_files", lambda prefix: [file])
+    monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
+    monkeypatch.setattr(run, "save_scheme_file", lambda *a, **k: None)
+    stats = run.load_schemes(object(), 2026, 9)
+    assert stats == Counter(files_failed=1, rows_loaded=1, rows_bad=1)
+    assert caplog.text.count("data row 2 skipped") == 1

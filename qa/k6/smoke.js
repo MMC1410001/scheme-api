@@ -2,7 +2,7 @@
 //   k6 run smoke.js
 import http from 'k6/http';
 import { check } from 'k6';
-import { BASE_URL, thresholds, summaryTrendStats, summaryTo } from './config.js';
+import { BASE_URL, thresholds, summaryTrendStats, summaryTo, authSetup } from './config.js';
 import { userIteration } from './traffic.js';
 
 export const options = {
@@ -17,6 +17,7 @@ export function setup() {
   if (!check(res, { 'health is 200': (r) => r.status === 200 })) {
     throw new Error(`API not healthy at ${BASE_URL} (status ${res.status})`);
   }
+  return authSetup(); // one token for the whole run
 }
 
 export default userIteration;

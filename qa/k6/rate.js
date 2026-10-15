@@ -4,7 +4,7 @@
 //   k6 run rate.js                        # 1,700 requests/s for 2 minutes
 //   RATE=600 DURATION=5m k6 run rate.js
 //   DEALER_COUNT=500 k6 run rate.js       # fewer distinct dealers = more repeats (higher hit rate)
-import { thresholds, summaryTrendStats, summaryTo } from './config.js';
+import { thresholds, summaryTrendStats, summaryTo, authSetup } from './config.js';
 import { oneRequest } from './traffic.js';
 
 const RATE = parseInt(__ENV.RATE || '1700');
@@ -25,4 +25,5 @@ export const options = {
 };
 
 export default oneRequest;
+export const setup = authSetup; // one token for the whole run
 export const handleSummary = summaryTo('rate');

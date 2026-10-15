@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from typing import Annotated, Any
 
@@ -12,8 +13,23 @@ def _reject_bool(value: Any) -> Any:
     return value
 
 
-Month = Annotated[int, Field(ge=1, le=12, description="1-12", examples=[10]), BeforeValidator(_reject_bool)]
-Year = Annotated[int, Field(ge=2000, le=2100, description="Four-digit year", examples=[2026]), BeforeValidator(_reject_bool)]
+def _digits_only(pattern: str, message: str):
+    """Accept a JSON integer, or a string matching pattern; no sign, decimal, exponent or spaces."""
+
+    def check(value: Any) -> Any:
+        if isinstance(value, str) and not re.fullmatch(pattern, value):
+            raise ValueError(message)
+        if isinstance(value, float):
+            raise ValueError(f"{message}, not a decimal")
+        return _reject_bool(value)
+
+    return BeforeValidator(check)
+
+
+Month = Annotated[int, Field(ge=1, le=12, description="1-12 (9 or 09)", examples=[10]),
+                  _digits_only(r"0?[1-9]|1[0-2]", "must be 1-12, written as one or two digits")]
+Year = Annotated[int, Field(ge=2000, le=2100, description="Four-digit year, 2000-2100", examples=[2026]),
+                 _digits_only(r"[0-9]{4}", "must be a four-digit year")]
 
 
 class DealerRequest(BaseModel):
@@ -30,7 +46,7 @@ class DealerRequest(BaseModel):
 
 
 class SchemeMonthRequest(DealerRequest):
-    """API 1 body: the dealer and the month to return. Month and year may be JSON numbers or numeric strings."""
+    """API 1 body: the dealer and the month to return. Month is 1-12, sent as 9 or 09 (number or string); year is four digits, 2000-2100 (number or string)."""
 
     month: Month
     year: Year
@@ -53,10 +69,27 @@ class SchemeRow(BaseModel):
     clear_cut: float | None
     shortfall_amount: float | None
     shortfall_pct: float | None
+    next_slab_rate: float | None = Field(description="Rebate rate of the next slab (SAP Next Slab Rate)")
+
+
+class TokenResponse(BaseModel):
+    """RFC 6749 section 5.1 access token response."""
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    scope: str
+
+
+class OAuthErrorResponse(BaseModel):
+    """RFC 6749 section 5.2 error from the token endpoint."""
+
+    error: str
+    error_description: str
 
 
 class ErrorMessage(BaseModel):
-    """Body of 401, 413, 500 and 503 responses."""
+    """Body of 401, 403, 413, 429, 500 and 503 responses."""
 
     detail: str
 

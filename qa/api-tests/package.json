@@ -11,6 +11,8 @@
     "test:edge": "playwright test --grep @edge",
     "test:negative": "playwright test --grep @negative",
     "test:security": "playwright test --grep @security",
+    "test:auth": "playwright test --grep \"Authentication|Bearer tokens|Token endpoint\"",
+    "test:dev": "API_BASE_URL=https://dev.example.com AUTH_ENABLED=true SAMPLE_DATA=false playwright test",
     "report": "playwright show-report"
   },
   "devDependencies": {

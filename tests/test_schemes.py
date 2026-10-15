@@ -11,7 +11,7 @@ from ingestion.schemes import check_columns, parse_date, parse_last_updated, par
 SAP_HEADER = [
     "Client", "Agreement", "Customer", "Valid from", "To", "Deal Suffix", "Comp desc",
     "GSR (Q)", "Invoiced Quantity(Q)", "GSR (B)", "Rebate Rate", "Clear Cut CN",
-    "Short Fall", "Short Fall %", "CN Date", "Last Updated Date", "Last Updated Time",
+    "Short Fall", "Short Fall %", "Next Slab Rate", "CN Date", "Last Updated Date", "Last Updated Time",
 ]
 
 
@@ -22,7 +22,7 @@ def sap_row(**values) -> dict:
         "Valid from": "01/08/2026", "To": "31/08/2026", "Deal Suffix": "06", "Comp desc": "LUXURY",
         "GSR (Q)": "12000.50 ", "Invoiced Quantity(Q)": "25.000 ", "GSR (B)": "12000.50 ",
         "Rebate Rate": "3.50 ", "Clear Cut CN": "420.02 ", "Short Fall": "75.00 ",
-        "Short Fall %": "75.00 ", "CN Date": "00/00/0000",
+        "Short Fall %": "75.00 ", "Next Slab Rate": "4.25 ", "CN Date": "00/00/0000",
         "Last Updated Date": "15/08/2026", "Last Updated Time": "10:20:56",
     }
     defaults.update(values)
@@ -41,6 +41,18 @@ def test_check_columns_names_what_is_missing():
         check_columns(row.keys())
 
 
+def test_file_without_next_slab_rate_is_rejected():
+    row = sap_row()
+    del row["next_slab_rate"]
+    with pytest.raises(ValueError, match="next_slab_rate"):
+        check_columns(row.keys())
+
+
+@pytest.mark.parametrize("raw, expected", [("0.75 ", Decimal("0.75")), ("1.25-", Decimal("-1.25")), ("", None)])
+def test_next_slab_rate_is_parsed_like_other_amounts(raw, expected):
+    assert to_record(sap_row(**{"Next Slab Rate": raw}), 2026, 8, "f.csv")["next_slab_rate"] == expected
+
+
 def test_luxury_and_premium_qualify_on_invoiced_quantity():
     record = to_record(sap_row(), 2026, 8, "f.csv")
     assert record["component"] == "LUXURY"
@@ -48,6 +60,7 @@ def test_luxury_and_premium_qualify_on_invoiced_quantity():
     assert record["qualification"] == Decimal("25.000")
     assert record["gsr_b"] == Decimal("12000.50")
     assert record["clear_cut"] == Decimal("420.02")
+    assert record["next_slab_rate"] == Decimal("4.25")
     assert (record["valid_from"], record["valid_to"]) == (date(2026, 8, 1), date(2026, 8, 31))
     assert record["last_updated_at"] == datetime(2026, 8, 15, 10, 20, 56)
     assert (record["agreement"], record["deal_suffix"]) == ("0200000001", "06")

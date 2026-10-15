@@ -85,7 +85,7 @@ fig, ax = canvas(10, 4.8)
 title(ax, "Figure 2 — API 1: from SAP export to API response")
 box(ax, 1, 10, 28, 29, "Input: SAP export (CSV)\n\n53 columns, 66 components\nOnly rows SAP updated that day\nUp to 50,000 rows per file\nDates DD/MM/YYYY\nNegatives as \"882.00-\"\nKey: Customer + Agreement\n        + Deal Suffix", "ext", align="left")
 box(ax, 36, 10, 28, 29, "Business rules\n\nKeep 8 components, exact name\nNewest \"Last Updated\" wins\nQualification:\n  GSR (Q): EB slabs, Value\n  GSR (B): EB FULL MONTH\n  Invoiced Qty (Q): Luxury,\n  Premium\nOnly the requested month", "ours", align="left")
-box(ax, 71, 10, 28, 29, "Output: API 1 response\n\n10 template fields per row\nUp to 8 rows per dealer:\n  EB SLAB 1, 2, 3, VALUE,\n  LUXURY, PREMIUM 01, 02,\n  EB FULL MONTH\nOrdered by ToDate, then\ntemplate order", "client", align="left")
+box(ax, 71, 10, 28, 29, "Output: API 1 response\n\n10 template fields +\nNextSlabRate per row\nUp to 8 rows per dealer:\n  EB SLAB 1, 2, 3, VALUE,\n  LUXURY, PREMIUM 01, 02,\n  EB FULL MONTH\nOrdered by ToDate, then\ntemplate order", "client", align="left")
 arrow(ax, (29.8, 24.5), (35.2, 24.5))
 arrow(ax, (64.8, 24.5), (70.2, 24.5))
 save(fig, "fig2_input_output")
@@ -96,9 +96,9 @@ title(ax, "Figure 3 — Solution architecture")
 box(ax, 1, 46, 17, 10, "SAP / the client\nexport job", "ext")
 box(ax, 24, 31, 20, 25, "GCS bucket\n\nsap-exports/YYYY/MM/\n  sap-exports_*.csv", "store", align="left")
 box(ax, 50, 38, 22, 18, "Ingestion job (cron)\npython -m ingestion.run\n\n1 list new files\n2 parse + validate\n3 upsert newest rows", "ours", align="left")
-box(ax, 50, 4, 22, 27, "PostgreSQL\n\nscheme_records\n  (latest row per dealer,\n   agreement, deal suffix)\ningested_files\n  (which files are loaded)", "store", align="left")
-box(ax, 78, 22, 21, 34, "FastAPI service\nuvicorn x 4 workers\n\nSecurity middleware\n  headers, 4 KB limit\nX-API-Key check\nRoutes /v1/schemes/...\nRepository\n  pooled, parameterised\n  SQL (pool -> 503)", "ours", align="left")
-box(ax, 78, 4, 21, 12, "the client systems\nPOST {dealer_code,\n  month, year}\n<- JSON rows", "client")
+box(ax, 50, 4, 22, 27, "PostgreSQL\n\nscheme_records\n  (latest row per dealer,\n   agreement, suffix,\n   period)\ningested_files\n  (which files are loaded)", "store", align="left")
+box(ax, 78, 22, 21, 34, "FastAPI service\nuvicorn x 4 workers\n\nSecurity middleware\n  headers, 4 KB limit\nBearer JWT check\nRoutes /v1/auth/token,\n  /v1/schemes/...\nRepository\n  pooled, parameterised\n  SQL (pool -> 503)", "ours", align="left")
+box(ax, 78, 4, 21, 12, "the client systems\ntoken once an hour;\nPOST {dealer_code,\nmonth, year} <- rows", "client")
 arrow(ax, (18.8, 51), (23.2, 51))
 arrow(ax, (44.8, 47), (49.2, 47), "read", loff=(0, 0.6))
 arrow(ax, (61, 37.6), (61, 31.6), "upsert", lpos=0.5, loff=(4.5, -1.5))
@@ -144,7 +144,7 @@ title(ax, "Figure 5 — API request lifecycle and responses")
 chain = [
     ("the client request\nPOST /v1/\nschemes/...", "client"),
     ("Body\n<= 4 KB?", "ours"),
-    ("X-API-Key\nvalid?", "ours"),
+    ("Bearer token\nvalid?", "ours"),
     ("body valid?\n(dealer, month)", "ours"),
     ("Query the\nrequested month", "store"),
     ("200 OK\nJSON array\n([] if none)", "client"),
@@ -155,7 +155,7 @@ for (text, kind), x in zip(chain, xs):
     box(ax, x, 25, W, 12, text, kind, size=8.2, bold_first=False)
 for i in range(len(xs) - 1):
     arrow(ax, (xs[i] + W + 0.5, 31), (xs[i + 1] - 0.5, 31), "yes" if 0 < i < 4 else "", loff=(0, 0.5), size=7.5)
-errs = [(17.5, "413\nToo large"), (34, "401\nUnauthorized"), (50.5, "422 Validation\nerror (input\nnot echoed)"), (67, "503 + Retry-\nAfter if DB\npool busy")]
+errs = [(17.5, "413\nToo large"), (34, "401 bad or\nexpired token\n403 scope"), (50.5, "422 Validation\nerror (input\nnot echoed)"), (67, "503 + Retry-\nAfter if DB\npool busy")]
 for x, text in errs:
     box(ax, x, 5, W, 12, text, "warn", size=7.8, bold_first=False)
     arrow(ax, (x + W / 2, 24.4), (x + W / 2, 17.6), "no" if "503" not in text else "", dashed=True, lpos=0.5, loff=(2.5, -1), size=7.5)
@@ -165,7 +165,7 @@ save(fig, "fig5_request_lifecycle")
 # Figure 6 — data model
 fig, ax = canvas(10, 5.4)
 title(ax, "Figure 6 — Data model (PostgreSQL)")
-box(ax, 1, 9, 38, 37, "scheme_records  (API 1)\n\nPK year, month, dealer_code,\n     agreement, deal_suffix\ncomponent  (one of 8)\nvalid_from, valid_to\nqualification_basis  (GSR | INVOICE_QTY)\nqualification, gsr_b, rebate_rate,\nclear_cut, shortfall_amount, shortfall_pct\nlast_updated_at  (decides latest)\nsource_file, raw  (original row, JSONB)", "store", align="left", size=8.6)
-box(ax, 45, 27, 26, 19, "ingested_files\n\nid  PK\nkind  (scheme)\ngcs_path, generation\nsource_updated_at\nyear, month, row_count\nloaded_at", "store", align="left", size=8.6)
+box(ax, 1, 9, 38, 37, "scheme_records  (API 1)\n\nKEY year, month, dealer_code,\n     agreement, deal_suffix,\n     valid_from, valid_to\ncomponent  (one of 8)\nqualification_basis  (GSR | INVOICE_QTY)\nqualification, gsr_b, rebate_rate,\nclear_cut, shortfall_amount, shortfall_pct,\nnext_slab_rate\nlast_updated_at  (decides latest)\nsource_file, raw  (original row, JSONB)", "store", align="left", size=8.6)
+box(ax, 45, 24, 26, 22, "ingested_files\n\nid  PK\nkind  (scheme)\ngcs_path, generation\nsource_updated_at\nyear, month, row_count\nloaded_at\nstatus, rows_bad", "store", align="left", size=8.6)
 box(ax, 76, 19, 23, 27, "Why upsert?\n\nDaily files hold only the\nrows SAP changed that day.\nEach row is stored once\nand replaced only by a\nnewer \"Last Updated\"\nversion, so files can be\nloaded in any order.", "note", align="left", size=8.4)
 save(fig, "fig6_data_model")

@@ -16,16 +16,19 @@ Postgres ──► FastAPI ──► the client
 |---|---|---|---|
 | 1 | `POST /v1/schemes/current-month` | `{"dealer_code": "6100000001", "month": 10, "year": 2026}` | The dealer's rows for the 8 template components in that month, in template order |
 
-API 1 returns a JSON list (empty when there's no data). Interactive docs: `/docs`.
+API 1 returns a JSON list (empty when there's no data). Every call needs `Authorization: Bearer <token>`,
+with a 1-hour token from `POST /v1/auth/token` (OAuth2 client credentials; see *Authentication*).
+Interactive docs: `/docs`.
 Requirements & solution design: [docs/Scheme_API_Requirements_and_Solution.md](docs/Scheme_API_Requirements_and_Solution.md) (Word version alongside).
 Integration guide: [docs/API_GUIDE.md](docs/API_GUIDE.md). Postman collection, Swagger spec and QA suite: [qa/](qa/README.md).
 
-API 1 returns the columns of the API template, with PascalCase keys like the other dealer APIs:
+API 1 returns the columns of the API template plus `NextSlabRate`, with PascalCase keys like the other dealer APIs:
 
 ```json
 {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-18",
  "ComponentDescription": "EB SLAB 2", "Qualification": 405232.86, "GsrB": 405232.86,
- "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0}
+ "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0,
+ "NextSlabRate": 1.0}
 ```
 
 ## Getting started (step by step)
@@ -60,19 +63,28 @@ cp .env.example .env.local
 
 `.env.local` holds your local settings and is never committed (the app reads it because
 `APP_ENV` defaults to `local`). The defaults are ready for local use:
-the API reads files from the `local_data/` folder instead of GCS, and requires the API key
-`local-test-key` in an `X-API-Key` header.
+the API reads files from the `local_data/` folder instead of GCS, and requires a Bearer token
+from the local client `local-client` / secret `local-test-secret` (Step 7 shows how to get one).
+To run locally without auth, delete `AUTH_CLIENTS` and `JWT_SECRET` from `.env.local` and start the
+API with `APP_ENV=local` set explicitly, e.g. `APP_ENV=local uv run uvicorn app.main:app --reload`
+(the API logs a warning). With `APP_ENV` unset and no auth settings the API refuses to start, so a
+server that forgets `APP_ENV` never runs open.
 
 ### Step 3 — Start the database
 
-Make sure Docker Desktop is running (whale icon in the menu bar), then:
+Make sure Docker Desktop is running (whale icon in the menu bar), then, from the repo folder:
 
 ```bash
-docker compose up -d
-docker compose ps        # should show "api-db-1 ... Up"
+docker run -d --name acme-db -p 5433:5432 \
+  -e POSTGRES_USER=acme -e POSTGRES_PASSWORD=acme -e POSTGRES_DB=acme \
+  -v "$PWD/sql":/docker-entrypoint-initdb.d:ro -v acme-pgdata:/var/lib/postgresql/data \
+  postgres:16
+docker ps --filter name=acme-db        # should show "Up"
 ```
 
-This starts PostgreSQL on port 5433 and creates the tables.
+This starts PostgreSQL on port 5433 and creates the tables. Next time: `docker start acme-db`.
+The repo has no Docker files (DevOps owns the deployment images); a local `docker-compose.yml` is
+gitignored if you prefer Compose.
 
 ### Step 4 — Install the Python packages
 
@@ -104,7 +116,8 @@ Leave this terminal open; it shows each request. `--reload` restarts the API whe
 
 Open **http://localhost:8000/docs** in your browser:
 
-1. Click **Authorize**, enter `local-test-key`, click **Authorize** → **Close**.
+1. Click **Authorize**, enter client_id `local-client` and client_secret `local-test-secret`, tick
+   the `schemes:read` scope, click **Authorize** → **Close**. Swagger UI fetches the token for you.
 2. Open **POST /v1/schemes/current-month** → **Try it out**.
 3. Use the body `{"dealer_code": "6100000001", "month": 10, "year": 2026}` (use the current month
    and year: the sample data is written for the current month) → **Execute**.
@@ -113,10 +126,17 @@ Open **http://localhost:8000/docs** in your browser:
 Or from a second terminal:
 
 ```bash
+# 1. Get a token (valid 1 hour; reuse it)
+TOKEN=$(curl -s -u local-client:local-test-secret -d grant_type=client_credentials \
+  http://localhost:8000/v1/auth/token | jq -r .access_token)
+
+# 2. Call the API with it
 curl -X POST http://localhost:8000/v1/schemes/current-month \
-  -H "Content-Type: application/json" -H "X-API-Key: local-test-key" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
+
+(`jq` comes with `brew install jq`; without it, copy `access_token` from the first response.)
 
 For Postman, see [qa/README.md](qa/README.md).
 
@@ -130,7 +150,8 @@ All tests should pass. They don't need the database or the API to be running.
 
 ### Step 9 — Stop everything
 
-Press `Ctrl+C` in the API terminal, then `docker compose stop`. Next time, start again from Step 3
+Press `Ctrl+C` in the API terminal, then `docker stop acme-db` (and `acme-redis` if you started it).
+Next time, `docker start acme-db` and continue from Step 4
 (skip Step 5 unless you want fresh sample data).
 
 ### Troubleshooting
@@ -138,8 +159,12 @@ Press `Ctrl+C` in the API terminal, then `docker compose stop`. Next time, start
 | Problem | Fix |
 |---|---|
 | `Cannot connect to the Docker daemon` | Open Docker Desktop and wait until it says it's running |
-| `port is already allocated` (5433 or 8000) | Something else uses the port: stop it, or change the port in `docker-compose.yml` / `--port` |
-| `401 Invalid or missing API key` | Send the header `X-API-Key: local-test-key` (or Authorize in `/docs`) |
+| `port is already allocated` (5433 or 8000) | Something else uses the port: stop it, or change the `-p` port in Step 3 / `--port` |
+| `401 Not authenticated` | Send `Authorization: Bearer <token>` (Step 7), or Authorize in `/docs` |
+| `401 Invalid token` / `401 Token expired` | Get a new token from `/v1/auth/token` (tokens last 1 hour; restarting with a new `JWT_SECRET` or removing the client also invalidates them) |
+| `401 invalid_client` from `/v1/auth/token` | Wrong client_id or secret: locally `local-client` / `local-test-secret` |
+| API won't start: `APP_ENV is not set and there are no auth settings` | Locally without auth, start with `APP_ENV=local uv run uvicorn ...`; otherwise set `AUTH_CLIENTS` and `JWT_SECRET` |
+| API won't start: `Auth settings invalid for APP_ENV=...` | Fix the listed `AUTH_CLIENTS` / `JWT_SECRET` problems (outside `local` the example values from `.env.example` are refused) |
 | API returns `[]` | No data for that dealer in that month (the sample data is for the current month): re-run Step 5, use dealer `6100000001` |
 | `422` from API 1 | `month` (1–12) and `year` (2000–2100) are required along with `dealer_code` |
 | `uv: command not found` | Close and reopen the terminal after installing uv |
@@ -166,17 +191,22 @@ up to 50,000 rows per file, several files a day).
   EB SLAB 3, VALUE, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. Look-alikes such as
   `ALWD EB2` or `ADDTNL PREMIUM 01` are dropped. The list is in `app/constants.py`.
 - Each daily file contains only the rows SAP updated that day. A row is identified by
-  Customer + Agreement + Deal Suffix, and the version with the newest
-  "Last Updated Date/Time" wins, whatever order files are loaded in.
+  Customer + Agreement + Deal Suffix + validity period (Valid from, To) within a month folder, and
+  the version with the newest "Last Updated Date/Time" wins, whatever order files are loaded in.
+  The period is part of the key because one month's folder can hold the same agreement and suffix
+  for two periods (late SAP updates of last month's scheme next to this month's); both are kept.
 - Qualification = `GSR (Q)` for EB SLAB 1–3 and Value, `Invoiced Quantity(Q)` for Luxury and Premium.
   EB FULL MONTH follows the EB slab working: SAP leaves its `GSR (Q)` empty (on slab rows `GSR (Q)`
   always equals `GSR (B)`), so its Qualification is `GSR (B)`.
 - After a rule change, recalculate a month that is already loaded with
   `uv run python -m ingestion.run schemes --year <Y> --month <M> --reload`.
 - Column mapping: From/To date = `Valid from`/`To`, GSR B = `GSR (B)`, Rebate rate = `Rebate Rate`,
-  Clear cut = `Clear Cut CN`, Shortfall amount/% = `Short Fall`/`Short Fall %`.
+  Clear cut = `Clear Cut CN`, Shortfall amount/% = `Short Fall`/`Short Fall %`, Next slab rate = `Next Slab Rate`
+  (required: a file without it is rejected like any other missing column).
 - Dates are DD/MM/YYYY; SAP negatives like `882.00-` become -882.
-- A row's month is the month folder its file came from.
+- A row belongs to every month its validity period (From–To) overlaps, not to its file's month folder
+  (the September folder also holds late updates of August schemes). The newest update of an agreement
+  wins; rows without dates use their folder's month.
 - Dealer codes are compared without leading zeros (`0006100000001` = `6100000001`).
 - EB amounts are running totals from the 1st: EB SLAB 1 (1–10 Oct, 10 lakh) is included in EB SLAB 2
   (1–15 Oct, 12 lakh), so 2 lakh were added, not 22. Each row is returned as SAP sends it and rows are
@@ -201,11 +231,47 @@ uv run python -m ingestion.run init-db
 Run the API (hide the server header; one worker per CPU core):
 
 ```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-server-header
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-server-header \
+  --proxy-headers --forwarded-allow-ips=<nginx/load balancer address>
 ```
 
 Each worker keeps up to `DB_POOL_MAX` (default 10) database connections. Requests over 4 KB get
 413, invalid ones 422, and if the database pool is exhausted the API answers 503 with `Retry-After`.
+
+**Rate limit per IP:** more than `RATE_LIMIT_PER_SECOND` (default 2,500) requests from one client
+IP in a second get `429 Too many requests` with `Retry-After: 1`; `/health` is never limited. 2,500/s
+(1.5 lakh a minute) is above the busiest load seen (1 lakh a minute), even if it all comes from one
+The client server, and k6 at 1,700/s showed no 429s and no slowdown. Counts are kept in Redis when
+`REDIS_URL` is set (exact across workers and servers, independent of `CACHE_ENABLED`); without Redis,
+or while it is down, each worker counts on its own. `RATE_LIMIT_ENABLED=false` turns it off.
+`--proxy-headers --forwarded-allow-ips` make the client IP the caller's (from `X-Forwarded-For`)
+rather than the proxy's; without them every caller shares one count. `POST /v1/auth/token` has its
+own, lower limit on top: `TOKEN_RATE_LIMIT_PER_MINUTE` (default 30) per IP per minute.
+
+**Authentication (OAuth2 client credentials + JWT, `app/security.py`):** a caller sends its
+`client_id` and `client_secret` to `POST /v1/auth/token` (`grant_type=client_credentials`, form-encoded
+or JSON, or the credentials as HTTP Basic) and gets a Bearer token valid for `JWT_TTL_SECONDS` (1 hour).
+It sends `Authorization: Bearer <token>` on every `/v1/schemes` call and gets a new token shortly
+before expiry or after a `401 Token expired`. Checking a token costs about 49 µs and needs no database
+or Redis call. `/health` needs no token.
+
+| Setting | Meaning |
+|---|---|
+| `AUTH_CLIENTS` | JSON `{"<client_id>": "<SHA-256 hex of its secret>"}`; only hashes are stored. Removing a client revokes its tokens at once |
+| `JWT_SECRET` | HS256 signing key, 32+ characters |
+| `JWT_PREVIOUS_SECRET` | The old key while rotating (optional) |
+| `JWT_TTL_SECONDS` | Token lifetime, default `3600` |
+| `TOKEN_RATE_LIMIT_PER_MINUTE` | Token requests per IP per minute, default `30` |
+
+```bash
+uv run python -m app.security new-client partner     # prints client_id, client_secret and the AUTH_CLIENTS entry
+uv run python -m app.security new-jwt-secret     # prints a JWT_SECRET
+```
+
+Rotating `JWT_SECRET` without downtime: move the current value to `JWT_PREVIOUS_SECRET`, set a new
+`JWT_SECRET`, restart, and remove `JWT_PREVIOUS_SECRET` after one `JWT_TTL_SECONDS`.
+Outside `APP_ENV=local` the API refuses to start unless `AUTH_CLIENTS` and `JWT_SECRET` are set and
+valid, and it refuses the local example values from `.env.example`.
 
 Cron (e.g. every 30 minutes):
 
@@ -219,16 +285,26 @@ database. Each `schemes` run:
 1. Lists the files in this month's GCS folder, e.g. `gs://acme-scheme-files/sap-exports/2026/10/`
    (next month `.../2026/11/`). The month comes from today's date in India time.
 2. Skips files it has already loaded (tracked in `ingested_files` by path and GCS version).
-3. Upserts the rows of new files: a row (Customer + Agreement + Deal Suffix) is inserted once and
-   only replaced by a newer "Last Updated" version, so re-runs and overlapping files never create
-   duplicates.
+3. Upserts the rows of new files: a row (Customer + Agreement + Deal Suffix + validity period) is
+   inserted once and only replaced by a newer "Last Updated" version, so re-runs and overlapping
+   files never create duplicates.
+4. Rows that can't be read (e.g. a bad date or number) are skipped and logged. Such a file is read
+   once more; if rows are still bad, its good rows are loaded and the file is recorded as
+   `failed` in `ingested_files` (`status`, `rows_bad`). A failed file is not retried until SAP
+   re-uploads it, or the month is loaded with `--reload`. To list them:
+   `SELECT gcs_path, rows_bad FROM ingested_files WHERE status = 'failed';`
+
+Upgrading a database loaded before the period joined the key: the next run (or `init-db`) changes
+the key by itself, but rows already written over by another period of the same agreement only come
+back by reloading those months: `python -m ingestion.run schemes --year 2026 --month 9 --reload`
+(each month that was loaded).
 
 How it loads quickly (a month has ~530 files of ~15 MB):
 
 - The next `LOADER_WORKERS` files (default 4) are downloaded and parsed in parallel while the
   current one is saved. Files are still saved one at a time, in order, each in one transaction.
 - A file's rows go to the database in one bulk `COPY` and one upsert, not one statement per row.
-- Measured on real September files from a laptop: about 6 s per file (download-bound, ~3 MB/s),
+- Measured on SAP export files from a laptop: about 6 s per file (download-bound, ~3 MB/s),
   against about 30 s before; saving takes 0.3–0.5 s per file. More workers don't help on a
   connection that is already full.
 - Only one run at a time: a run that finds another still going (e.g. a long backfill when the next
@@ -237,7 +313,8 @@ How it loads quickly (a month has ~530 files of ~15 MB):
   and save time.
 
 The job logs a summary (`files_loaded`, `rows_loaded`, `rows_other_components`, `rows_bad`,
-`files_older`, …) and exits with code 1 if any file failed.
+`files_older`, …) and exits with code 1 if any file failed, including files marked `failed` for
+bad rows (their good rows are still loaded).
 
 ## Environments (local, dev, uat, prod)
 
@@ -247,7 +324,7 @@ changes per environment). Environment variables always win over the file.
 
 | Environment | `APP_ENV` | Settings file | Differences |
 |---|---|---|---|
-| Local | `local` (default) | `.env.local` | Sample files from `local_data/`, local Postgres and Redis in Docker, `local-test-key` |
+| Local | `local` (default) | `.env.local` | Sample files from `local_data/`, local Postgres and Redis in Docker, client `local-client` / `local-test-secret` |
 | Dev | `dev` | `.env.dev` | The teammate's shared `app_db` (team VPN only); cache off; `/docs` on |
 | UAT | `uat` | `.env.uat` | UAT database and Redis (from DevOps); cache on; `/docs` on |
 | Prod | `prod` | `.env.prod` | Production database and Redis; cache on; `/docs` off |
@@ -261,9 +338,15 @@ For DevOps, per environment:
 1. Create `.env.<env>` from `.env.example` (or load the values into the platform's secret manager /
    environment variables), set `APP_ENV=<env>` for the API and the cron job, and fill in the values
    marked `[dev/uat/prod]`.
-2. `API_KEY`: a separate long random secret per environment
-   (`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`). Give it to the API callers
-   through a secure channel; it must never be committed.
+2. Auth (see *Authentication* above), separately per environment, never reused:
+   - one client per caller: `uv run python -m app.security new-client partner` (and e.g. `qa`). Give
+     the printed `client_id` and `client_secret` to that caller through a secure channel; put the
+     printed hash entries together in `AUTH_CLIENTS`, e.g. `{"partner": "<hash>", "qa": "<hash>"}`;
+   - `JWT_SECRET`: `uv run python -m app.security new-jwt-secret`.
+
+   Existing `.env.dev`, `.env.uat` and `.env.prod` must get `AUTH_CLIENTS` and `JWT_SECRET` before
+   the next deploy, or the API will not start. Their `API_KEY` lines are no longer used and can be
+   removed. Secrets must never be committed.
 3. `GOOGLE_APPLICATION_CREDENTIALS`: path to the GCS service-account key mounted on the server
    (or run as a service account that can read the bucket).
 4. `DOCS_ENABLED`: `true` for dev and UAT, `false` for prod (the template defaults to `true`, so
@@ -272,7 +355,15 @@ For DevOps, per environment:
    its scripts from `cdn.jsdelivr.net`.
 5. Give the cron job the same settings as the API (database, GCS and, for the cache,
    `CACHE_ENABLED` and `REDIS_URL`).
-6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`.
+6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`. Each loader run
+   also adds tables or indexes from newer releases (e.g. API 1's dealer index), so no extra step after
+   an upgrade, but run `init-db` once right after deploying one so the API is fast before the next load.
+7. Rate limit: start uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy address>` (above) and
+   make the proxy send `X-Forwarded-For`; set `RATE_LIMIT_PER_SECOND` only to change the 2,500 default.
+8. Upgrading to the release that adds `NextSlabRate` (2026-10-15): run `init-db` **before** starting the
+   new API. It adds the `next_slab_rate` column and fills it for rows already loaded (from each
+   row's stored SAP data); the new API fails with 500 until the column exists. Cached responses
+   use a new key prefix, so no old body without `NextSlabRate` is served.
 
 ## Response cache (Redis)
 
@@ -292,7 +383,8 @@ the data only changes when the cron job loads new files. So API responses can be
 - If Redis is down or slow (over 0.25 s), requests are answered from the database as usual and
   Redis is not tried again for 30 s. Responses carry `X-Cache: HIT`, `MISS` or `BYPASS` while the
   cache is on.
-- Local Redis: `docker compose up -d redis`, then set `CACHE_ENABLED=true` and
+- Local Redis: `docker run -d --name acme-redis -p 6379:6379 redis:7-alpine redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru`,
+  then set `CACHE_ENABLED=true` and
   `REDIS_URL=redis://localhost:6379/0` in `.env.local` and restart the API.
 
 Measured on a laptop at 1,700 requests/s (1 lakh a minute) for 2 minutes, `qa/k6/rate.js`: without
@@ -302,7 +394,7 @@ the cache 1,596/s got through (p95 1.4 s); with a warm cache 1,695/s (median 1.3
 ## Project layout
 
 ```
-app/          FastAPI app: routes, models, SQL queries, API key, security middleware
+app/          FastAPI app: routes, models, SQL queries, OAuth2/JWT auth (security.py), security middleware
 ingestion/    cron job: read files from GCS, apply scheme rules, load into Postgres
 sql/          table definitions
 scripts/      sample-data generator, OpenAPI export
@@ -320,4 +412,4 @@ qa/           Postman collection, Swagger spec and Playwright tests, k6, securit
       from-date then to-date. The API returns `FromDate` = `Valid from` and `ToDate` = `To`.
 - [x] API 1: the client sends the month and year in the request (built)
 - [ ] Backfill: which earlier months must be loaded before go-live?
-- [ ] Auth: the client calls with no auth today. Set `API_KEY` to require an `X-API-Key` header.
+- [x] Auth: OAuth2 client credentials + JWT Bearer tokens (1 hour); required outside `local`, the API won't start without it.

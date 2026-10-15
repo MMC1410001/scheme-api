@@ -26,6 +26,7 @@ refreshed automatically as new exports arrive (several times a day).
 
 | API | Endpoint | Purpose |
 |---|---|---|
+| Auth | `POST /v1/auth/token` | Get an access token (OAuth2 client credentials) |
 | API 1 | `POST /v1/schemes/current-month` | A dealer's scheme rows for a given month and year |
 | Health | `GET /health` | Liveness check |
 
@@ -40,14 +41,52 @@ All production traffic must use HTTPS.
 
 ### 1.3 Authentication
 
-Send your API key in the `X-API-Key` header on every `/v1` request. The key is shared with you
-separately; never put it in URLs, logs or source code. `/health` does not need a key.
+The API uses OAuth2 client credentials (RFC 6749) with short-lived JWT Bearer tokens (RFC 6750).
+You receive a `client_id` and a `client_secret` per environment through a secure channel. Keep the
+secret in a secret store; never put it in URLs, logs or source code. `/health` needs no token.
+
+**Step 1 — get a token.** `POST /v1/auth/token` with `grant_type=client_credentials`, form-encoded
+(the OAuth2 standard) or as JSON. Send the credentials either as HTTP Basic auth or as `client_id`
+and `client_secret` in the body, not both.
+
+```bash
+curl -X POST "$BASE_URL/v1/auth/token" -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials
+```
+
+```json
+{"access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "Bearer", "expires_in": 3600, "scope": "schemes:read"}
+```
+
+`scope` is optional; the only scope is `schemes:read`.
+
+**Step 2 — call the API** with the token in the `Authorization` header:
 
 ```
-X-API-Key: <your key>
+Authorization: Bearer <access_token>
 ```
 
-A missing or wrong key returns `401 Unauthorized`.
+**Reuse the token.** A token is valid for `expires_in` seconds (1 hour). Keep it in memory and send
+it on every call until shortly before it expires (about 60 seconds before), then get a new one.
+Do not request a token per call: the token endpoint allows only 30 requests a minute per IP. If a
+call returns `401` with `"detail": "Token expired"`, get a new token and retry that call once.
+
+**Authentication errors**
+
+| Endpoint | Status | Body | What to do |
+|---|---|---|---|
+| `/v1/auth/token` | `400` | `{"error": "invalid_request", "error_description": "..."}` (missing `grant_type`, unreadable body, credentials in both Basic and body, repeated parameter) | Fix the request |
+| `/v1/auth/token` | `400` | `{"error": "unsupported_grant_type", ...}` | Send `grant_type=client_credentials` |
+| `/v1/auth/token` | `400` | `{"error": "invalid_scope", ...}` | Omit `scope` or send `schemes:read` |
+| `/v1/auth/token` | `401` | `{"error": "invalid_client", "error_description": "Client authentication failed"}` | Check `client_id` and `client_secret` (a wrong id and a wrong secret look the same) |
+| `/v1/auth/token` | `429` | `{"detail": "Too many requests"}` + `Retry-After` | More than 30 token requests a minute from your IP: cache the token |
+| `/v1/schemes/...` | `401` | `{"detail": "Not authenticated"}` | Send `Authorization: Bearer <token>` |
+| `/v1/schemes/...` | `401` | `{"detail": "Invalid token"}` | Get a new token; if that fails with `invalid_client`, contact us |
+| `/v1/schemes/...` | `401` | `{"detail": "Token expired"}` | Get a new token and retry once |
+| `/v1/schemes/...` | `403` | `{"detail": "Insufficient scope"}` | The token lacks `schemes:read`; get a token without a `scope` parameter |
+
+`401` and `403` responses also carry a `WWW-Authenticate: Bearer ...` header (RFC 6750). Token
+responses are never cached (`Cache-Control: no-store`).
 
 ### 1.4 Request format
 
@@ -60,8 +99,8 @@ API 1 takes the dealer code and the month:
 | Field | Type | Rules |
 |---|---|---|
 | `dealer_code` | string or number | Required. SAP customer code, letters and digits only, 1–20 characters. Leading zeros and surrounding spaces are ignored, so `"0006100000001"`, `" 6100000001 "` and `6100000001` are the same dealer. |
-| `month` | integer (or numeric string) | Required. 1–12. `10` and `"10"` are both accepted; `true`, `9.5` or `"Oct"` are rejected. |
-| `year` | integer (or numeric string) | Required. Four digits, 2000–2100. |
+| `month` | integer (or numeric string) | Required. 1–12. One or two digits: `9`, `09`, `"9"`, `"09"`, `10` are accepted; `-9`, `9.5`, `0`, `009`, `true` or `"Oct"` are rejected. |
+| `year` | integer (or numeric string) | Required. Four digits, 2000–2100: `2026` or `"2026"`; `02026`, `"26"`, `-2026`, `2026.0` or `" 2026 "` are rejected. |
 
 Send `Content-Type: application/json`. Bodies larger than 4 KB are rejected.
 
@@ -79,7 +118,7 @@ Only these 8 components are returned:
 ```bash
 curl -X POST "$BASE_URL/v1/schemes/current-month" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
 
@@ -97,7 +136,8 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
     "RebateRate": 0.75,
     "ClearCut": 0.0,
     "ShortfallAmount": 0.0,
-    "ShortfallPct": 0.0
+    "ShortfallPct": 0.0,
+    "NextSlabRate": 1.0
   },
   {
     "Customer": "6100000001",
@@ -109,7 +149,8 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
     "RebateRate": 1.0,
     "ClearCut": 1592.93,
     "ShortfallAmount": 84.9,
-    "ShortfallPct": 21.23
+    "ShortfallPct": 21.23,
+    "NextSlabRate": 1.5
   }
 ]
 ```
@@ -128,6 +169,7 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
 | `ClearCut` | number | Clear-cut credit note amount | Clear Cut CN |
 | `ShortfallAmount` | number | Shortfall to the next slab | Short Fall |
 | `ShortfallPct` | number | Shortfall as a percentage | Short Fall % |
+| `NextSlabRate` | number | Rebate rate of the next slab | Next Slab Rate |
 
 Amounts are JSON numbers and can be negative (for example after returns). Any amount may be
 `null` if SAP left it blank.
@@ -138,7 +180,10 @@ SLAB 1, 2 and 3 (which end mid-month) come first and EB FULL MONTH comes last.
 **Freshness:** each row shows SAP's most recent update for that component. A component appears
 once SAP has exported it for the month, so early in the month a dealer may have fewer than 8 rows.
 
-**Months:** a row belongs to the month of the SAP export folder it came from. A new month's data
+**Months:** a row belongs to every month its validity period (`FromDate`–`ToDate`) overlaps, not to
+the SAP export folder it came from: SAP keeps updating last month's schemes in the first days of the
+new month's folder, and those rows stay in last month. If an agreement was updated in two folders, the
+newest update is returned. Rows without dates fall back to their folder's month. A new month's data
 appears once its first SAP export has been loaded (usually within hours of the 1st); until then
 that month returns `[]`. Earlier months stay available.
 
@@ -149,26 +194,32 @@ that month returns `[]`. Earlier months stay available.
 
 ### 1.6 Errors
 
-Errors are JSON with a `detail` field. They never contain stack traces or echo your input back.
+Errors are JSON with a `detail` field (the token endpoint uses the OAuth2 `error` /
+`error_description` format instead, see 1.3). They never contain stack traces or echo your input back.
 
 | Status | When | Example body |
 |---|---|---|
-| `401` | Missing or wrong `X-API-Key` | `{"detail": "Invalid or missing API key"}` |
+| `401` | Missing, invalid or expired Bearer token (see 1.3) | `{"detail": "Token expired"}` |
+| `403` | Token without the `schemes:read` scope | `{"detail": "Insufficient scope"}` |
 | `404` | Unknown path | `{"detail": "Not Found"}` |
 | `405` | Wrong HTTP method (e.g. `GET` on a `POST` endpoint) | `{"detail": "Method Not Allowed"}` |
 | `413` | Body larger than 4 KB | `{"detail": "Request body too large"}` |
 | `422` | Invalid body: missing/empty `dealer_code`, invalid characters, too long; missing or out-of-range `month`/`year`; invalid JSON | `{"detail": [{"loc": ["body", "dealer_code"], "msg": "String should match pattern '^[A-Za-z0-9]+$'", "type": "string_pattern_mismatch"}]}` |
+| `429` | More than 2,500 requests in one second from your IP. Retry after the `Retry-After` seconds (1). | `{"detail": "Too many requests"}` |
 | `503` | Temporarily overloaded. Retry after the `Retry-After` seconds. | `{"detail": "Service busy, please retry"}` |
 | `500` | Unexpected server error. Please report it with the time of the request. | `{"detail": "Internal server error"}` |
 
-**Retry advice:** retry `503` (and network timeouts) with backoff, starting from `Retry-After`.
-Do not retry `4xx` errors without fixing the request.
+**Retry advice:** retry `429` and `503` (and network timeouts) with backoff, starting from `Retry-After`.
+On `401 Token expired`, get a new token and retry once. Do not retry other `4xx` errors without
+fixing the request.
 
 ### 1.7 Using Postman
 
 1. In Postman, **Import** the API 1 collection from `qa/postman/` and an environment
    file (`Dev.postman_environment.json`).
-2. Select the environment, then set `baseUrl`, `apiKey` and `dealerCode` (a dealer with data).
+2. Select the environment, then set `baseUrl`, `clientId`, `clientSecret` and `dealerCode` (a
+   dealer with data). The collection's pre-request script gets a token from `/v1/auth/token` and
+   reuses it until shortly before it expires, so you never handle the token yourself.
 3. Open the collection, then **2. Monthly schemes**,
    pick a request and click **Send**. Each request has saved example responses under **Examples**.
 4. To run every check, open the collection and click **Run**. Each request carries automatic
@@ -176,32 +227,90 @@ Do not retry `4xx` errors without fixing the request.
 
 ### 1.8 Code examples
 
-**Python**
+Both examples keep one token in memory, get a new one about 60 seconds before it expires, and
+retry a call once after `401 Token expired`. `BASE_URL`, `CLIENT_ID` and `CLIENT_SECRET` come from
+your configuration or secret store. In a multi-threaded or multi-process service, share the token
+(and refresh it under a lock) rather than fetching one per thread.
+
+**Python (requests)**
 
 ```python
+import time
 import requests
 
-response = requests.post(
-    f"{BASE_URL}/v1/schemes/current-month",
-    json={"dealer_code": "6100000001", "month": 10, "year": 2026},
-    headers={"X-API-Key": API_KEY},
-    timeout=15,
-)
-response.raise_for_status()
-for row in response.json():
+session = requests.Session()
+_token = {"value": None, "expires_at": 0.0}
+
+
+def get_token(force: bool = False) -> str:
+    if force or time.time() >= _token["expires_at"] - 60:
+        r = session.post(f"{BASE_URL}/v1/auth/token", data={"grant_type": "client_credentials"},
+                         auth=(CLIENT_ID, CLIENT_SECRET), timeout=15)
+        r.raise_for_status()
+        body = r.json()
+        _token.update(value=body["access_token"], expires_at=time.time() + body["expires_in"])
+    return _token["value"]
+
+
+def current_month(dealer_code: str, month: int, year: int) -> list[dict]:
+    for attempt in range(2):
+        r = session.post(f"{BASE_URL}/v1/schemes/current-month",
+                         json={"dealer_code": dealer_code, "month": month, "year": year},
+                         headers={"Authorization": f"Bearer {get_token(force=attempt > 0)}"},
+                         timeout=15)
+        if r.status_code == 401 and attempt == 0 and r.json().get("detail") == "Token expired":
+            continue  # get a new token and retry once
+        r.raise_for_status()
+        return r.json()
+
+
+for row in current_month("6100000001", 10, 2026):
     print(row["ComponentDescription"], row["Qualification"], row["GsrB"])
 ```
 
-**JavaScript (Node 18+)**
+**JavaScript (Node 18+, fetch)**
 
 ```javascript
-const response = await fetch(`${BASE_URL}/v1/schemes/current-month`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-  body: JSON.stringify({ dealer_code: '6100000001', month: 10, year: 2026 }),
-});
-if (!response.ok) throw new Error(`HTTP ${response.status}`);
-const rows = await response.json();
+let token = null;
+let expiresAt = 0;
+
+async function getToken(force = false) {
+  if (force || Date.now() >= expiresAt - 60_000) {
+    const res = await fetch(`${BASE_URL}/v1/auth/token`, {
+      method: 'POST',
+      body: new URLSearchParams({
+        grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
+      }),
+    });
+    if (!res.ok) throw new Error(`Token request failed: HTTP ${res.status}`);
+    const body = await res.json();
+    token = body.access_token;
+    expiresAt = Date.now() + body.expires_in * 1000;
+  }
+  return token;
+}
+
+async function currentMonth(dealerCode, month, year) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(`${BASE_URL}/v1/schemes/current-month`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await getToken(attempt > 0)}`,
+      },
+      body: JSON.stringify({ dealer_code: dealerCode, month, year }),
+    });
+    if (res.status === 401 && attempt === 0) {
+      const { detail } = await res.json();
+      if (detail === 'Token expired') continue; // get a new token and retry once
+      throw new Error(`HTTP 401: ${detail}`);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+}
+
+const rows = await currentMonth('6100000001', 10, 2026);
 ```
 
 ### 1.9 FAQ
@@ -263,14 +372,17 @@ cd qa/postman
 npx newman run Scheme_API1_Current_Month.postman_collection.json -e Local.postman_environment.json
 
 # Playwright (all, or one file with npm run test:api1 / test:common)
-cd qa/api-tests && npm install && API_KEY=<key> AUTH_ENABLED=true npx playwright test
+cd qa/api-tests && npm install && CLIENT_ID=<id> CLIENT_SECRET=<secret> AUTH_ENABLED=true npx playwright test
 
 # k6
-cd qa/k6 && API_KEY=<key> k6 run smoke.js && API_KEY=<key> k6 run load.js
+cd qa/k6 && CLIENT_ID=<id> CLIENT_SECRET=<secret> k6 run smoke.js && CLIENT_ID=<id> CLIENT_SECRET=<secret> k6 run load.js
 
 # Security scans
-API_KEY=<key> qa/security/run_scans.sh
+CLIENT_ID=<id> CLIENT_SECRET=<secret> qa/security/run_scans.sh
 ```
+
+Locally the client is `CLIENT_ID=local-client CLIENT_SECRET=local-test-secret`. The suites get a
+token from `/v1/auth/token` themselves.
 
 ### 2.3 Acceptance criteria
 
