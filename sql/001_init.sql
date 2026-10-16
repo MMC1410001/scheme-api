@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS scheme_records (
     dealer_code         TEXT NOT NULL,
     agreement           TEXT NOT NULL,
     deal_suffix         TEXT NOT NULL,
-    component           TEXT NOT NULL CHECK (component IN (
-                            'EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE',
+    component           TEXT NOT NULL CONSTRAINT scheme_records_component_check CHECK (component IN (
+                            'EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'VALUE %', 'VALUE FA',
                             'LUXURY', 'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH')),
     valid_from          DATE,
     valid_to            DATE,
@@ -101,6 +101,24 @@ BEGIN
         FROM (SELECT ctid AS row_id, replace(replace(btrim(raw->>'next_slab_rate'), ',', ''), '%', '') AS v
               FROM scheme_records) s
         WHERE r.ctid = s.row_id;
+    END IF;
+END $$;
+
+-- Upgrade a table made before VALUE % and VALUE FA were served: replace its component CHECK.
+-- Only when the stored CHECK lacks them, so later runs don't re-check every row.
+DO $$
+DECLARE
+    old_check TEXT;
+BEGIN
+    SELECT c.conname INTO old_check FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+    WHERE c.conrelid = 'scheme_records'::regclass AND c.contype = 'c' AND a.attname = 'component'
+      AND pg_get_constraintdef(c.oid) NOT LIKE '%VALUE FA%';
+    IF old_check IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE scheme_records DROP CONSTRAINT %I', old_check);
+        ALTER TABLE scheme_records ADD CONSTRAINT scheme_records_component_check CHECK (component IN (
+            'EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'VALUE %', 'VALUE FA',
+            'LUXURY', 'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH'));
     END IF;
 END $$;
 

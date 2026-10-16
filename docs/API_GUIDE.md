@@ -109,9 +109,9 @@ Send `Content-Type: application/json`. Bodies larger than 4 KB are rejected.
 `POST /v1/schemes/current-month`
 
 Returns one row per scheme component for the dealer, for the month and year in the request.
-Only these 8 components are returned:
+Only these 10 components are returned:
 
-`EB SLAB 1`, `EB SLAB 2`, `EB SLAB 3`, `VALUE`, `LUXURY`, `PREMIUM 01`, `PREMIUM 02`, `EB FULL MONTH`
+`EB SLAB 1`, `EB SLAB 2`, `EB SLAB 3`, `VALUE`, `VALUE %`, `VALUE FA`, `LUXURY`, `PREMIUM 01`, `PREMIUM 02`, `EB FULL MONTH`
 
 **Example request**
 
@@ -122,7 +122,7 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
 
-**Example response** `200 OK` (shortened to 2 of the 8 rows)
+**Example response** `200 OK` (shortened to 2 of the 10 rows)
 
 ```json
 [
@@ -162,7 +162,7 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
 | `Customer` | string | Dealer (SAP customer) code | Customer |
 | `FromDate` | date `YYYY-MM-DD` | Start of the component's validity | Valid from |
 | `ToDate` | date `YYYY-MM-DD` | End of the component's validity | To |
-| `ComponentDescription` | string | One of the 8 components above | Comp desc |
+| `ComponentDescription` | string | One of the 10 components above | Comp desc |
 | `Qualification` | number | **GSR** for EB slabs, EB Full Month and Value; **invoiced quantity** for Luxury and Premium | GSR (Q); for EB Full Month GSR (B), the same GSR the slabs show; Invoiced Quantity(Q) |
 | `GsrB` | number | Gross Sales Revenue used for the benefit | GSR (B) |
 | `RebateRate` | number | Rebate rate | Rebate Rate |
@@ -178,7 +178,7 @@ Amounts are JSON numbers and can be negative (for example after returns). Any am
 SLAB 1, 2 and 3 (which end mid-month) come first and EB FULL MONTH comes last.
 
 **Freshness:** each row shows SAP's most recent update for that component. A component appears
-once SAP has exported it for the month, so early in the month a dealer may have fewer than 8 rows.
+once SAP has exported it for the month, so early in the month a dealer may have fewer than 10 rows.
 
 **Months:** a row belongs to every month its validity period (`FromDate`–`ToDate`) overlaps, not to
 the SAP export folder it came from: SAP keeps updating last month's schemes in the first days of the
@@ -319,7 +319,7 @@ const rows = await currentMonth('6100000001', 10, 2026);
 code against SAP (leading zeros don't matter) and the month and year. A new month returns `[]`
 until its first SAP export has been loaded.
 
-**Why fewer than 8 rows?** A component appears after SAP exports it for the month. Early in the
+**Why fewer than 10 rows?** A component appears after SAP exports it for the month. Early in the
 month some components may not have been exported yet.
 
 **Can I ask for a previous month?** Yes: send its `month` and `year`.
@@ -355,7 +355,7 @@ exports. Dealers to use:
 
 | Dealer | API 1 |
 |---|---|
-| `6100000001` | All 8 components; LUXURY updated on day 2, so the newer values must be returned |
+| `6100000001` | All 10 components; LUXURY updated on day 2, so the newer values must be returned |
 | `6100000002` | Negative SAP values (`882.00-` in the file becomes `-882`) |
 | `6200000001`–`6200020000` | Load-test dealers |
 | `6199999999` | No data (expects `[]`) |

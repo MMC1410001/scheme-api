@@ -1,4 +1,4 @@
-// API 1 — POST /v1/schemes/current-month: the dealer's rows for the 8 template components in the
+// API 1 — POST /v1/schemes/current-month: the dealer's rows for the 10 template components in the
 // requested month. Body: {"dealer_code": ..., "month": 1-12, "year": 2000-2100}.
 // Settings (API_BASE_URL, CLIENT_ID, CLIENT_SECRET, DEALER_CODE, SAMPLE_DATA, MONTH, YEAR, ...) are described in helpers.js.
 const crypto = require('crypto');
@@ -11,7 +11,8 @@ const {
 const FIELDS = ['Customer', 'FromDate', 'ToDate', 'ComponentDescription', 'Qualification', 'GsrB',
   'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct', 'NextSlabRate'];
 const AMOUNTS = ['Qualification', 'GsrB', 'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct', 'NextSlabRate'];
-const COMPONENTS = ['EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'LUXURY', 'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH'];
+const COMPONENTS = ['EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'VALUE %', 'VALUE FA', 'LUXURY', 'PREMIUM 01',
+  'PREMIUM 02', 'EB FULL MONTH'];
 const MONTH_PREFIX = `${MONTH.year}-${String(MONTH.month).padStart(2, '0')}`;
 const MONTH_END = `${MONTH_PREFIX}-${String(new Date(Date.UTC(MONTH.year, MONTH.month, 0)).getUTCDate()).padStart(2, '0')}`;
 
@@ -45,7 +46,7 @@ test.describe('API 1 - Monthly schemes', () => {
       for (const row of await rowsFor(DEALER)) expect(Object.keys(row).sort()).toEqual([...FIELDS].sort());
     });
 
-    test('API1_TC_3 Only the 8 template components are returned', async () => {
+    test('API1_TC_3 Only the 10 template components are returned', async () => {
       for (const row of await rowsFor(DEALER)) expect(COMPONENTS).toContain(row.ComponentDescription);
     });
 
@@ -128,7 +129,7 @@ test.describe('API 1 - Monthly schemes', () => {
       }
     });
 
-    test('API1_TC_16 [sample data] Sample dealer has all 8 components', async () => {
+    test('API1_TC_16 [sample data] Sample dealer has all 10 components', async () => {
       test.skip(!SAMPLE_DATA, 'needs scripts/make_sample_data.py data');
       const rows = await rowsFor('6100000001');
       expect(rows.map((r) => r.ComponentDescription).sort()).toEqual([...COMPONENTS].sort());

@@ -66,7 +66,7 @@ def test_luxury_and_premium_qualify_on_invoiced_quantity():
     assert (record["agreement"], record["deal_suffix"]) == ("0200000001", "06")
 
 
-@pytest.mark.parametrize("component", ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE"])
+@pytest.mark.parametrize("component", ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE", "VALUE %", "VALUE FA"])
 def test_eb_slabs_and_value_qualify_on_gsr_q(component):
     record = to_record(sap_row(**{"Comp desc": component, "GSR (Q)": "12000.50 ", "GSR (B)": "999.00 "}), 2026, 8, "f.csv")
     assert record["qualification_basis"] == "GSR"
@@ -81,12 +81,13 @@ def test_eb_full_month_takes_its_gsr_from_gsr_b_like_the_slabs():
     assert record["gsr_b"] == Decimal("405232.86")
 
 
-@pytest.mark.parametrize("component", ["ALWD EB2", "ALWD VALUE SCH", "ADDN LUX INT", "ADDTNL PREMIUM 01", "ROLLER"])
+@pytest.mark.parametrize("component", ["ALWD EB2", "ALWD VALUE SCH", "ALWD VALUE", "VALUE SCH %", "VALUE SCH FA",
+                                       "ADDN LUX INT", "ADDTNL PREMIUM 01", "ROLLER"])
 def test_look_alike_components_are_dropped(component):
     assert to_record(sap_row(**{"Comp desc": component}), 2026, 8, "f.csv") is None
 
 
-def test_all_eight_template_components_are_kept():
+def test_all_ten_template_components_are_kept():
     for component in COMPONENTS:
         assert to_record(sap_row(**{"Comp desc": component}), 2026, 8, "f.csv") is not None
 

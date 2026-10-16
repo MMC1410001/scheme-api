@@ -12,6 +12,23 @@
 
 ## Summary
 
+### Components VALUE % and VALUE FA added — 2026-10-16 (local)
+
+API 1 now serves 10 components: `VALUE %` and `VALUE FA` (Qualification from GSR (Q), like `VALUE`;
+ordered right after `VALUE`). Both spellings were checked in the Sep/Oct 2026 SAP data on dev;
+look-alikes `VALUE SCH %` and `VALUE SCH FA` stay excluded. Local sample data regenerated (20,000
+made-up dealers × 10 components) and October reloaded; the database's component CHECK is upgraded by
+`sql/001_init.sql` on the next loader run or `init-db`.
+
+| Suite | Total | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| pytest (unit + database tests, `TEST_DATABASE_URL` set) | 354 | 354 | 0 | 0 |
+| Postman — API 1 collection (65 requests) — assertions (newman) | 308 | 308 | 0 | 0 |
+| Playwright — API 1 + common | 100 | 97 | 0 | 3 |
+| End to end: sample files → loader → API, dealer `6100000001` returns 10 rows, VALUE → VALUE % → VALUE FA | 1 | 1 | 0 | 0 |
+
+pytest: 1 failure in the first of 9 runs, not reproduced in the next 8 (the name was not captured).
+
 ### QA audit and regression run — 2026-10-16 (local)
 
 Independent exploratory testing against the Swagger spec, a code review of `app/` and `ingestion/`,

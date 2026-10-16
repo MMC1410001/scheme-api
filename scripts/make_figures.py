@@ -84,8 +84,8 @@ save(fig, "fig1_business_context")
 fig, ax = canvas(10, 4.8)
 title(ax, "Figure 2 — API 1: from SAP export to API response")
 box(ax, 1, 10, 28, 29, "Input: SAP export (CSV)\n\n53 columns, 66 components\nOnly rows SAP updated that day\nUp to 50,000 rows per file\nDates DD/MM/YYYY\nNegatives as \"882.00-\"\nKey: Customer + Agreement\n        + Deal Suffix", "ext", align="left")
-box(ax, 36, 10, 28, 29, "Business rules\n\nKeep 8 components, exact name\nNewest \"Last Updated\" wins\nQualification:\n  GSR (Q): EB slabs, Value\n  GSR (B): EB FULL MONTH\n  Invoiced Qty (Q): Luxury,\n  Premium\nOnly the requested month", "ours", align="left")
-box(ax, 71, 10, 28, 29, "Output: API 1 response\n\n10 template fields +\nNextSlabRate per row\nUp to 8 rows per dealer:\n  EB SLAB 1, 2, 3, VALUE,\n  LUXURY, PREMIUM 01, 02,\n  EB FULL MONTH\nOrdered by ToDate, then\ntemplate order", "client", align="left")
+box(ax, 36, 10, 28, 29, "Business rules\n\nKeep 10 components, exact name\nNewest \"Last Updated\" wins\nQualification:\n  GSR (Q): EB slabs, Value,\n  Value %, Value FA\n  GSR (B): EB FULL MONTH\n  Invoiced Qty (Q): Luxury,\n  Premium\nOnly the requested month", "ours", align="left")
+box(ax, 71, 10, 28, 29, "Output: API 1 response\n\n10 template fields +\nNextSlabRate per row\nUp to 10 rows per dealer:\n  EB SLAB 1, 2, 3, VALUE,\n  VALUE %, VALUE FA,\n  LUXURY, PREMIUM 01, 02,\n  EB FULL MONTH\nOrdered by ToDate, then\ntemplate order", "client", align="left")
 arrow(ax, (29.8, 24.5), (35.2, 24.5))
 arrow(ax, (64.8, 24.5), (70.2, 24.5))
 save(fig, "fig2_input_output")
@@ -114,7 +114,7 @@ steps = [
     ("Cron starts\n(every\n30 min)", "ext"),
     ("List files in\nthis month's\nfolder", "ours"),
     ("Read CSV,\ncheck\ncolumns", "ours"),
-    ("One of the\n8 compo-\nnents?", "ours"),
+    ("One of the\n10 compo-\nnents?", "ours"),
     ("Parse dates\nand\nnumbers", "ours"),
     ("Upsert if\nLast Updated\nis newer", "store"),
     ("Mark file\nloaded,\nlog summary", "ours"),

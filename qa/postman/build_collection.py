@@ -12,7 +12,8 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
 API1 = "{{baseUrl}}/v1/schemes/current-month"
-COMPONENTS = ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE", "LUXURY", "PREMIUM 01", "PREMIUM 02", "EB FULL MONTH"]
+COMPONENTS = ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE", "VALUE %", "VALUE FA", "LUXURY", "PREMIUM 01", "PREMIUM 02",
+              "EB FULL MONTH"]
 
 def script(lines):
     return [{"listen": "test", "script": {"type": "text/javascript", "exec": lines}}]
@@ -82,7 +83,7 @@ ROW_CHECKS = [
     'const FIELDS = ["Customer","FromDate","ToDate","ComponentDescription","Qualification","GsrB","RebateRate","ClearCut","ShortfallAmount","ShortfallPct","NextSlabRate"];',
     f'const COMPONENTS = {json.dumps(COMPONENTS)};',
     'pm.test("Every row has exactly the template fields", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(FIELDS)));',
-    'pm.test("Only the 8 template components are returned", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));',
+    'pm.test("Only the 10 template components are returned", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));',
     'pm.test("Customer matches the requested dealer", () => rows.forEach(r => pm.expect(r.Customer).to.eql(pm.collectionVariables.get("dealerCode") || pm.environment.get("dealerCode"))));',
     'pm.test("Dates are YYYY-MM-DD and FromDate <= ToDate", () => rows.forEach(r => { pm.expect(r.FromDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.ToDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.FromDate <= r.ToDate).to.be.true; }));',
     'pm.test("Amounts are numbers (or null)", () => rows.forEach(r => ["Qualification","GsrB","RebateRate","ClearCut","ShortfallAmount","ShortfallPct","NextSlabRate"].forEach(k => pm.expect(r[k] === null || typeof r[k] === "number").to.be.true)));',
@@ -106,7 +107,7 @@ health = req("Health check", "GET", "{{baseUrl}}/health", auth=NO_AUTH,
 SAME_COUNT = 'pm.test("Same row count as the first request", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get("api1RowCount"))));'
 api1 = [
     req("Monthly schemes - dealer code as string", "POST", API1, {"dealer_code": "{{dealerCode}}", **MONTH_VARS}, ROW_CHECKS,
-        description=("Returns the dealer's rows for the 8 template components in the given month, ordered by end date. "
+        description=("Returns the dealer's rows for the 10 template components in the given month, ordered by end date. "
                      "`month` and `year` default to the current month (India time) unless the environment sets them."),
         examples=[example("200 - rows for a dealer", "OK", 200, SAMPLE_ROWS, {"dealer_code": "6100000001", "month": 10, "year": 2026}),
                   example("200 - dealer with no data that month", "OK", 200, [], {"dealer_code": "6199999999", "month": 10, "year": 2026})]),
@@ -355,7 +356,7 @@ COLLECTIONS = {
     "Scheme_API1_Current_Month.postman_collection.json": collection(
         "collection-api1", "Scheme API 1 - Monthly schemes",
         ("API 1: POST /v1/schemes/current-month with {dealer_code, month, year} returns the dealer's rows for the "
-         "8 template components in that month. month/year default to the current month (India time); set `month` "
+         "10 template components in that month. month/year default to the current month (India time); set `month` "
          "and `year` in the environment to test another month."),
         "Monthly schemes", api1, API1,
         [{"key": "api1RowCount", "value": ""}, {"key": "month", "value": ""}, {"key": "year", "value": ""}],
