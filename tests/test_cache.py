@@ -177,3 +177,14 @@ def test_cached_value_is_the_json_body(client, repo, response_cache, fake_redis)
     (key,) = [k for k in fake_redis.data if k != VERSION_KEY]
     assert key == "acme:v2:0:api1:6100009999:2026:9"
     assert json.loads(fake_redis.data[key])[0]["ComponentDescription"] == "LUXURY"
+
+
+@pytest.mark.parametrize("version", [b"abc", b"1.5", b""])
+def test_a_corrupt_data_version_bypasses_the_cache_instead_of_failing(client, repo, response_cache, fake_redis, version):
+    """QA 2026-10-16 #10: int() of a bad version raised ValueError and every cached request got 500."""
+    fake_redis.data[VERSION_KEY] = version
+    response = api1(client)
+    assert response.status_code == 200
+    expected = "MISS" if version == b"" else "BYPASS"  # empty reads as version 0, like a missing key
+    assert response.headers["X-Cache"] == expected
+    assert response.json()[0]["Customer"] == "6100009999"

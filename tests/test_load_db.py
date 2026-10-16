@@ -284,6 +284,16 @@ def test_a_file_with_bad_rows_is_recorded_as_failed_and_not_retried(schemas):
     assert bulk.execute("SELECT status, rows_bad FROM ingested_files").fetchone() == {"status": "loaded", "rows_bad": 0}
 
 
+def test_an_unreadable_file_is_recorded_as_failed_with_no_rows_and_not_retried(schemas):
+    """QA 2026-10-16 #5: a file that can't be read at all is recorded, so later runs skip it."""
+    _, bulk = schemas
+    save_scheme_file(bulk, source(1), 2026, 9, [], failed=True)
+    entry = bulk.execute("SELECT status, rows_bad, row_count FROM ingested_files").fetchone()
+    assert entry == {"status": "failed", "rows_bad": 0, "row_count": 0}
+    assert bulk.execute("SELECT count(*) AS n FROM scheme_records").fetchone()["n"] == 0
+    assert is_loaded(bulk, "scheme", source(1))
+
+
 # The tables as they were before the dates joined the key and files got a status.
 OLD_SCHEMA = """
 CREATE TABLE ingested_files (

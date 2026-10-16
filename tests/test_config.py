@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from app.config import Settings
+
 ROOT = Path(__file__).resolve().parent.parent
 SHOW = "from app.config import ENV_FILE, get_settings as g; s = g(); print(ENV_FILE, s.jwt_ttl_seconds, s.docs_enabled)"
 
@@ -58,6 +60,39 @@ def test_api_starts_with_auth_settings_or_locally_without_any(tmp_path):
     assert start_api(tmp_path, APP_ENV="local").returncode == 0  # local, auth off
     assert start_api(tmp_path, APP_ENV="local", JWT_SECRET="short").returncode != 0  # local, but half configured
     assert start_api(tmp_path, **GOOD_AUTH).returncode == 0  # APP_ENV unset, auth on
+    assert start_api(tmp_path, APP_ENV="local", **EXAMPLE_AUTH).returncode == 0  # .env.example values, locally
+
+
+EXAMPLE_AUTH = {  # the published .env.example client and key
+    "AUTH_CLIENTS": '{"local-client": "0b1f90b824765bd860b58a3ebc0396a4f6f4c4ad8f1eed10135c0cb6cf3bd171"}',
+    "JWT_SECRET": "local-only-jwt-signing-key-not-for-servers-0001",
+}
+
+
+@pytest.mark.parametrize("env, problem", [
+    (EXAMPLE_AUTH, "local example client"),
+    ({**EXAMPLE_AUTH, "AUTH_CLIENTS": GOOD_AUTH["AUTH_CLIENTS"]}, "local example key"),
+    ({**EXAMPLE_AUTH, "JWT_SECRET": GOOD_AUTH["JWT_SECRET"]}, "local example client"),
+])
+def test_example_credentials_need_app_env_local_set_explicitly(tmp_path, env, problem):
+    """QA 2026-10-16 #7: a server that forgets APP_ENV must not run on credentials anyone can read."""
+    result = start_api(tmp_path, **env)
+    assert result.returncode != 0
+    assert problem in result.stderr and "APP_ENV=(not set)" in result.stderr and "set APP_ENV=local" in result.stderr
+
+
+def test_trusted_proxies_are_read_as_a_comma_separated_list(monkeypatch):
+    """QA 2026-10-16 #1."""
+    monkeypatch.setenv("TRUSTED_PROXIES", " 10.0.0.5, 172.18.0.0/16 ,::1")
+    assert Settings(_env_file=None).trusted_proxies == ["10.0.0.5", "172.18.0.0/16", "::1"]
+    monkeypatch.setenv("TRUSTED_PROXIES", "")
+    assert Settings(_env_file=None).trusted_proxies == []
+
+
+def test_a_bad_trusted_proxy_stops_the_api(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.5,nginx")
+    with pytest.raises(ValueError, match="nginx"):
+        Settings(_env_file=None)
 
 
 def test_api_refuses_to_run_open_when_app_env_is_unset(tmp_path):

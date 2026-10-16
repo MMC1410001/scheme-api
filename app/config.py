@@ -1,6 +1,7 @@
 import json
 import os
 from functools import lru_cache
+from ipaddress import ip_network
 from typing import Annotated
 
 from pydantic import SecretStr, field_validator
@@ -47,9 +48,15 @@ class Settings(BaseSettings):
     rate_limit_per_second: int = 2500
     # POST /v1/auth/token per client IP per minute, on top of the above. A client needs one token an hour.
     token_rate_limit_per_minute: int = 30
+    # Proxies (nginx, load balancer) whose X-Forwarded-For is believed, as IPs or CIDRs separated by
+    # commas, e.g. TRUSTED_PROXIES=10.0.0.5,172.18.0.0/16. Empty: X-Forwarded-For is ignored and the
+    # client IP is the connection's address. Start the API with `python -m app` (app/__main__.py),
+    # which turns off uvicorn's own X-Forwarded-For handling so this setting decides.
+    trusted_proxies: Annotated[list[str], NoDecode] = []
     # Requests only carry a dealer code, so anything bigger is rejected (413).
     max_body_bytes: int = 4096
-    # "Current month" is decided in this timezone, not the server's.
+    # The loader's default month (`ingestion.run schemes` without --year/--month) is the current
+    # month in this timezone, not the server's. The API always takes the month from the request.
     timezone: str = "Asia/Kolkata"
 
     gcs_bucket: str = "acme-scheme-files"
@@ -70,6 +77,16 @@ class Settings(BaseSettings):
         """JSON from the environment; an empty AUTH_CLIENTS= means no clients rather than a parse error."""
         if isinstance(value, str):
             return json.loads(value) if value.strip() else {}
+        return value
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _parse_trusted_proxies(cls, value):
+        """Comma-separated IPs/CIDRs; each must be valid, so a typo stops the API instead of trusting nothing."""
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        for entry in value:
+            ip_network(entry, strict=False)  # ValueError names the bad entry
         return value
 
     @field_validator("jwt_secret", "jwt_previous_secret", mode="before")

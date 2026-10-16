@@ -120,6 +120,18 @@ def test_malformed_token_requests_get_400(client, request_kwargs, error):
     assert response.json()["error"] == error
 
 
+@pytest.mark.parametrize("raw", [
+    '{"grant_type": "client_credentials", "client_id": "partner", "client_secret": "bad", "client_secret": "%s"}',
+    '{"grant_type": "client_credentials", "client_id": "x", "client_id": "partner", "client_secret": "%s"}',
+    '{"grant_type": "password", "grant_type": "client_credentials", "client_id": "partner", "client_secret": "%s"}',
+])
+def test_a_json_parameter_sent_twice_gets_400_like_a_form_one(client, raw):
+    """QA 2026-10-16 #9: json.loads keeps the last repeated key, which let a second secret win."""
+    response = client.post(TOKEN_URL, content=raw % SECRET, headers={"Content-Type": "application/json"})
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_request", "error_description": "A parameter was sent more than once"}
+
+
 def test_secret_that_is_not_valid_utf8_gets_400_not_500(client):
     raw = b'{"grant_type": "client_credentials", "client_id": "partner", "client_secret": "\\ud800"}'
     response = client.post(TOKEN_URL, content=raw, headers={"Content-Type": "application/json"})

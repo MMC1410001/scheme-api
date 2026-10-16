@@ -144,12 +144,13 @@ def fake_month(monkeypatch):
         with lock:
             month["running"] -= 1
         if content == b"d":
-            raise ValueError("Missing columns ['customer']")
+            raise run.UnreadableFile("ValueError: Missing columns ['customer']")
         return [{"file": content.decode()}] * 2, Counter(rows_other_components=1)
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
     monkeypatch.setattr(run, "save_scheme_file",
-                        lambda conn, f, y, m, records, rows_bad=0: month["saved"].append(f.path.rsplit("/", 1)[1]))
+                        lambda conn, f, y, m, records, rows_bad=0, failed=False:
+                        month["saved"].append(f.path.rsplit("/", 1)[1] + (" (failed)" if failed else "")))
     return month
 
 
@@ -159,7 +160,9 @@ def workers(monkeypatch, n):
 
 def test_files_are_saved_in_listing_order_and_bad_files_are_counted(fake_month):
     stats = run.load_schemes(object(), 2026, 9)
-    assert fake_month["saved"] == ["a.csv", "c.csv", "e.csv"]  # b already loaded, d unreadable
+    # b already loaded; d unreadable twice, so recorded as failed (not retried by later runs)
+    assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
+    assert fake_month["parsed"].count("d") == 2  # read once more before giving up
     assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_other_components=3)
 
 
@@ -182,19 +185,19 @@ def test_loader_workers_bounds_parallel_reads(fake_month, monkeypatch, n):
     workers(monkeypatch, n)
     run.load_schemes(object(), 2026, 9)
     assert fake_month["peak"] <= n
-    assert fake_month["saved"] == ["a.csv", "c.csv", "e.csv"]
+    assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
 
 
 def test_zero_workers_still_loads(fake_month, monkeypatch):
     workers(monkeypatch, 0)
     run.load_schemes(object(), 2026, 9)
-    assert fake_month["saved"] == ["a.csv", "c.csv", "e.csv"]
+    assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
 
 
 def test_lost_connection_stops_without_reading_further_files(fake_month, monkeypatch):
     workers(monkeypatch, 1)
 
-    def save(conn, f, y, m, records, rows_bad=0):
+    def save(conn, f, y, m, records, rows_bad=0, failed=False):
         raise psycopg.OperationalError("the connection is closed")
 
     monkeypatch.setattr(run, "save_scheme_file", save)
@@ -238,18 +241,18 @@ def test_counts_are_right_after_a_reconnect(fake_month, monkeypatch):
     real_save = run.save_scheme_file
     lost = []
 
-    def save(conn, f, y, m, records, rows_bad=0):
+    def save(conn, f, y, m, records, rows_bad=0, failed=False):
         if f.path.endswith("c.csv") and not lost:
             lost.append(f.path)
             raise psycopg.OperationalError("the connection is closed")
-        real_save(conn, f, y, m, records, rows_bad)
+        real_save(conn, f, y, m, records, rows_bad, failed)
 
     monkeypatch.setattr(run, "save_scheme_file", save)
     stats, done = Counter(), set()
     with pytest.raises(psycopg.OperationalError):
         run.load_schemes(object(), 2026, 9, stats=stats, done=done)
     run.load_schemes(object(), 2026, 9, stats=stats, done=done)  # what main() does after reconnecting
-    assert fake_month["saved"] == ["a.csv", "c.csv", "e.csv"]
+    assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
     assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_other_components=3)
 
 
@@ -262,7 +265,7 @@ def test_lost_connection_does_not_wait_for_downloads_in_progress(fake_month, mon
             time.sleep(0.5)  # being prefetched while a is saved
         return real_parse(content, path, year, month, header_rows, log_rows)
 
-    def save(conn, f, y, m, records, rows_bad=0):
+    def save(conn, f, y, m, records, rows_bad=0, failed=False):
         raise psycopg.OperationalError("the connection is closed")
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
@@ -353,3 +356,91 @@ def test_each_bad_row_is_logged_once_even_when_the_file_is_read_twice(monkeypatc
     stats = run.load_schemes(object(), 2026, 9)
     assert stats == Counter(files_failed=1, rows_loaded=1, rows_bad=1)
     assert caplog.text.count("data row 2 skipped") == 1
+
+
+# --- QA 2026-10-16 regressions ------------------------------------------------------------------
+
+SAP_COLUMNS = ("Client,Agreement,Customer,Valid from,To,Deal Suffix,Comp desc,GSR (Q),Invoiced Quantity(Q),"
+               "GSR (B),Rebate Rate,Clear Cut CN,Short Fall,Short Fall %,Next Slab Rate,Last Updated Date,"
+               "Last Updated Time")
+SAP_LINE = "100,0200000001,6100009999,01/10/2026,31/10/2026,06,LUXURY,1.00,2.000,3.00,1.00,0.00,0.00,0.00,1.25,01/10/2026,10:00:00"
+
+
+def test_both_month_folders_are_loaded_when_both_exist(monkeypatch):
+    """#2: with files in 2026/01/ and 2026/1/, the 1/ folder used to be skipped without a word."""
+    listed = {"sap-exports/2026/01/": [run.SourceFile("sap-exports/2026/01/a.csv", "1", datetime.now(timezone.utc),
+                                                      lambda: b"a")],
+              "sap-exports/2026/1/": [run.SourceFile("sap-exports/2026/1/b.csv", "1", datetime.now(timezone.utc),
+                                                     lambda: b"b")]}
+    saved = []
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(run, "list_files", lambda prefix: listed.get(prefix, []))
+    monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
+    monkeypatch.setattr(run, "parse_scheme_file", lambda content, *a, **k: ([{"f": content}], Counter()))
+    monkeypatch.setattr(run, "save_scheme_file", lambda conn, f, *a, **k: saved.append(f.path))
+    stats = run.load_schemes(object(), 2026, 1)
+    assert saved == ["sap-exports/2026/01/a.csv", "sap-exports/2026/1/b.csv"]
+    assert stats["files_loaded"] == 2
+
+
+@pytest.mark.parametrize(("content", "reason"), [
+    (f"{SAP_COLUMNS}\n{SAP_LINE.replace('LUXURY', 'LUXURY é')}\n".encode("cp1252"), "UnicodeDecodeError"),  # #5
+    (f"{SAP_COLUMNS.replace('Customer', 'Dealer')}\n{SAP_LINE}\n".encode(), "Missing columns"),  # #5
+    (b"Foo,Bar\n", "Missing columns"),  # #12: header only, wrong columns
+    (b"", "Missing columns"),  # empty file
+    (SAP_COLUMNS.replace(",", ";").encode() + b"\n", "Missing columns"),  # wrong delimiter
+])
+def test_a_file_that_cannot_be_read_as_a_whole_raises_unreadable_file(content, reason):
+    with pytest.raises(run.UnreadableFile, match=reason):
+        run.parse_scheme_file(content, "f.csv", 2026, 10, header_rows=1)
+
+
+def test_a_header_only_file_with_the_right_columns_loads_no_rows():
+    assert run.parse_scheme_file(f"{SAP_COLUMNS}\n".encode(), "f.csv", 2026, 10, 1) == ([], Counter())
+
+
+def test_an_unreadable_file_is_read_again_then_recorded_as_failed(monkeypatch):
+    """#5: it used to be left unrecorded, so every cron run downloaded it again and failed again."""
+    reads, saved = [], []
+    bad = run.SourceFile("sap-exports/2026/10/x.csv", "1", datetime.now(timezone.utc),
+                         lambda: reads.append(1) or b"Foo,Bar\n")
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(run, "list_files", lambda prefix: [bad] if prefix.endswith("/10/") else [])
+    monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
+    monkeypatch.setattr(run, "save_scheme_file",
+                        lambda conn, f, y, m, records, rows_bad=0, failed=False: saved.append((f.path, records, failed)))
+    stats = run.load_schemes(object(), 2026, 10)
+    assert len(reads) == 2
+    assert saved == [("sap-exports/2026/10/x.csv", [], True)]
+    assert stats == Counter(files_failed=1, files_skipped=0)
+
+
+def test_a_download_error_is_not_recorded_so_the_next_run_retries(monkeypatch):
+    def broken():
+        raise ConnectionError("GCS timed out")
+
+    saved = []
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(run, "list_files", lambda prefix: [run.SourceFile("p/x.csv", "1", datetime.now(timezone.utc),
+                                                                          broken)] if prefix.endswith("/10/") else [])
+    monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
+    monkeypatch.setattr(run, "save_scheme_file", lambda *a, **k: saved.append(a))
+    stats = run.load_schemes(object(), 2026, 10)
+    assert saved == [] and stats["files_failed"] == 1
+
+
+def test_the_default_month_is_the_current_month_in_india_time(monkeypatch, no_wait):
+    """#14: TIMEZONE decides the loader's default month (31 Oct 20:00 UTC is already 1 Nov in India)."""
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 31, 20, 0, tzinfo=timezone.utc).astimezone(tz)
+
+    months = []
+    monkeypatch.setattr(run, "datetime", FrozenDatetime)
+    monkeypatch.setattr(run, "load_schemes", lambda conn, year, month, *a: months.append((year, month)))
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None))
+    run.main(["schemes"])
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None, timezone="UTC"))
+    run.main(["schemes"])
+    assert months == [(2026, 11), (2026, 10)]

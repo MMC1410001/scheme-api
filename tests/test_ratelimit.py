@@ -1,3 +1,4 @@
+import pytest
 import redis
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
@@ -149,3 +150,62 @@ def test_named_limits_keep_their_own_redis_keys(monkeypatch):
                         client=("10.0.0.1", 50000))
     client.post("/v1/auth/token")
     assert fake.data == {"acme:rate:token:10.0.0.1:16": 1}
+
+
+# --- Client IP behind a proxy (QA 2026-10-16 #1) ---------------------------------------------------
+
+def scope_from(peer: str, *forwarded: str) -> dict:
+    return {"client": (peer, 50000), "headers": [(b"x-forwarded-for", value.encode()) for value in forwarded]}
+
+
+NGINX = ratelimit.trusted_networks(["10.0.0.5", "172.18.0.0/16"])
+
+
+@pytest.mark.parametrize(("scope", "trusted", "expected"), [
+    (scope_from("203.0.113.9", "1.2.3.4"), (), "203.0.113.9"),                # no trusted proxies: header ignored
+    (scope_from("203.0.113.9", "1.2.3.4"), NGINX, "203.0.113.9"),             # caller is not a proxy: ignored
+    (scope_from("10.0.0.5", "198.51.100.7"), NGINX, "198.51.100.7"),          # nginx says who called it
+    (scope_from("10.0.0.5", "1.2.3.4, 198.51.100.7"), NGINX, "198.51.100.7"),  # caller's own entry is skipped
+    (scope_from("10.0.0.5", "1.2.3.4", "198.51.100.7"), NGINX, "198.51.100.7"),  # two headers read as one list
+    (scope_from("10.0.0.5", "198.51.100.7, 172.18.0.3"), NGINX, "198.51.100.7"),  # through two trusted proxies
+    (scope_from("10.0.0.5", "1.2.3.4, not-an-ip"), NGINX, "10.0.0.5"),        # unreadable entry: the proxy
+    (scope_from("10.0.0.5"), NGINX, "10.0.0.5"),                              # no header
+    (scope_from("10.0.0.5", "172.18.0.9"), NGINX, "172.18.0.9"),              # only proxies: the farthest one
+    (scope_from("::1", "198.51.100.7"), ratelimit.trusted_networks(["::1"]), "198.51.100.7"),
+    ({"headers": []}, NGINX, "unknown"),
+])
+def test_client_ip_believes_x_forwarded_for_only_from_trusted_proxies(scope, trusted, expected):
+    assert ratelimit.client_ip(scope, trusted) == expected
+
+
+def test_a_spoofed_x_forwarded_for_does_not_get_a_fresh_limit(monkeypatch):
+    """Locally, uvicorn trusted 127.0.0.1 and let any X-Forwarded-For pick a new IP: 429 became 200."""
+    freeze_time(monkeypatch)
+    client, _ = make_client(per_second=1, ip="127.0.0.1")
+    assert client.get("/v1/x").status_code == 200
+    assert client.get("/v1/x", headers={"X-Forwarded-For": "1.2.3.4"}).status_code == 429
+    assert client.get("/v1/x", headers={"X-Forwarded-For": "5.6.7.8"}).status_code == 429
+
+
+def test_callers_behind_a_trusted_proxy_each_get_their_own_limit(monkeypatch):
+    freeze_time(monkeypatch)
+    app = Starlette(routes=[Route("/v1/x", ok)])
+    limited = RateLimitMiddleware(app, limit=1, trusted_proxies=["10.0.0.5"])
+    nginx = TestClient(limited, client=("10.0.0.5", 50000))
+    first = {"X-Forwarded-For": "198.51.100.7"}
+    assert nginx.get("/v1/x", headers=first).status_code == 200
+    assert nginx.get("/v1/x", headers=first).status_code == 429
+    assert nginx.get("/v1/x", headers={"X-Forwarded-For": "198.51.100.8"}).status_code == 200
+    # the first caller can't escape by adding its own entry: nginx appends the real address last
+    assert nginx.get("/v1/x", headers={"X-Forwarded-For": "9.9.9.9, 198.51.100.7"}).status_code == 429
+
+
+def test_launcher_turns_off_uvicorns_proxy_headers(monkeypatch):
+    from app import __main__ as launcher
+    calls = []
+    monkeypatch.setattr(launcher.uvicorn, "run", lambda *a, **k: calls.append((a, k)))
+    launcher.main(["--port", "9001", "--workers", "2"])
+    (args, kwargs), = calls
+    assert args == ("app.main:app",)
+    assert kwargs["proxy_headers"] is False and kwargs["server_header"] is False
+    assert (kwargs["port"], kwargs["workers"], kwargs["host"]) == (9001, 2, "127.0.0.1")

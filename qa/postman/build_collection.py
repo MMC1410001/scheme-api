@@ -121,6 +121,10 @@ api1 = [
     req("Monthly schemes - month zero-padded (09)", "POST", API1,
         raw_body='{\n  "dealer_code": "{{dealerCode}}",\n  "month": {{monthPadded}},\n  "year": {{year}}\n}',
         tests=[status(200), SAME_COUNT], description="Month as two digits, unquoted: 09 is accepted as 9 (for October onwards this sends 10, 11, 12)."),
+    req("Monthly schemes - Content-Type in another case (Application/JSON) with month 09", "POST", API1,
+        raw_body='{\n  "dealer_code": "{{dealerCode}}",\n  "month": {{monthPadded}},\n  "year": {{year}}\n}',
+        headers=[{"key": "Content-Type", "value": "Application/JSON"}], tests=[status(200), SAME_COUNT],
+        description="Media types are case-insensitive: a zero-padded month must work with Application/JSON too (QA 2026-10-16 #8)."),
     req("Monthly schemes - month with no data returns []", "POST", API1, {"dealer_code": "{{dealerCode}}", "month": 1, "year": 2000},
         tests=[status(200), empty_array]),
     req("Monthly schemes - unknown dealer returns []", "POST", API1, {"dealer_code": "{{unknownDealerCode}}", **MONTH_VARS},
@@ -139,6 +143,7 @@ api1_month_negative = [
     for field, value in [
         ("month", "-9"), ("month", "-09"), ("month", '"+9"'), ("month", "9.0"), ("month", '"9.0"'),
         ("month", "009"), ("month", '"009"'), ("month", "00"), ("month", '" 9 "'),
+        ("month", "010"), ("month", "0010"), ("month", '"0010"'), ("month", '"012"'),
         ("year", "02026"), ("year", '"26"'), ("year", '"+2026"'), ("year", "2026.0"), ("year", '" 2026 "'),
     ]
 ]
@@ -247,6 +252,10 @@ auth_cases = [
     token_req("Token - invalid scope -> 400 invalid_scope", oauth_error(400, "invalid_scope"), form=GOOD_FORM + [("scope", "admin")]),
     token_req("Token - Basic and body credentials together -> 400 invalid_request", oauth_error(400, "invalid_request"),
               auth=basic_auth("{{clientId}}", "{{clientSecret}}")),
+    token_req("Token - JSON parameter sent twice -> 400 invalid_request", oauth_error(400, "invalid_request"),
+              raw_body='{\n  "grant_type": "client_credentials",\n  "client_id": "{{clientId}}",\n  "client_secret": "wrong-secret-qa",\n  "client_secret": "{{clientSecret}}"\n}',
+              headers=[{"key": "Content-Type", "value": "application/json"}],
+              description="A repeated JSON key used to keep the last value, so a second secret won (QA 2026-10-16 #9)."),
     token_req("Token - GET -> 405", [status(405)], method="GET", headers=[]),
     token_req("Token - response is not cacheable (no-store, Pragma no-cache)", [
         status(200), *NO_STORE,
@@ -287,6 +296,15 @@ def security(url, base=None):
             description="A non-ASCII credential used to crash the old key check (500)."),
         validation(url, "SQL injection payload is rejected", b({"dealer_code": "1' OR '1'='1"}), echoed="1' OR '1'='1"),
         validation(url, "Script payload is rejected and not reflected", b({"dealer_code": "<script>alert(1)</script>"}), echoed="<script>"),
+        req("Swagger UI loads a pinned release with integrity hashes", "GET", "{{baseUrl}}/docs", auth=NO_AUTH, tests=[
+            'if (pm.response.code === 404) { pm.test("SKIPPED: docs are off on this server (DOCS_ENABLED=false)", () => {}); return; }',
+            status(200),
+            'const html = pm.response.text();',
+            'pm.test("Not the floating @5 release", () => pm.expect(html).to.not.include("swagger-ui-dist@5/"));',
+            'pm.test("Script pinned with SRI", () => pm.expect(html).to.match(/<script src="https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/swagger-ui-bundle\\.js" integrity="sha384-[^"]+" crossorigin="anonymous">/));',
+            'pm.test("Stylesheet pinned with SRI", () => pm.expect(html).to.match(/href="https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/swagger-ui\\.css" integrity="sha384-[^"]+" crossorigin="anonymous">/));',
+            'pm.test("CSP allows only that release", () => pm.expect(pm.response.headers.get("Content-Security-Policy")).to.match(/script-src [^;]*https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/;/));',
+        ], description="QA 2026-10-16 #14: the docs page used swagger-ui-dist@5 (any 5.x) with no integrity check."),
         req("Oversized body -> 413", "POST", url, raw_body=json.dumps({"dealer_code": "1" * 5000}), tests=[status(413)]),
         req("Security headers are present", "POST", url, b({"dealer_code": "{{dealerCode}}"}), tests=[
             status(200),

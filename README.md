@@ -61,14 +61,15 @@ All the commands below are run from this folder.
 cp .env.example .env.local
 ```
 
-`.env.local` holds your local settings and is never committed (the app reads it because
-`APP_ENV` defaults to `local`). The defaults are ready for local use:
+`.env.local` holds your local settings and is never committed (the app reads it when `APP_ENV`
+is `local`, the default). The defaults are ready for local use:
 the API reads files from the `local_data/` folder instead of GCS, and requires a Bearer token
 from the local client `local-client` / secret `local-test-secret` (Step 7 shows how to get one).
 To run locally without auth, delete `AUTH_CLIENTS` and `JWT_SECRET` from `.env.local` and start the
-API with `APP_ENV=local` set explicitly, e.g. `APP_ENV=local uv run uvicorn app.main:app --reload`
-(the API logs a warning). With `APP_ENV` unset and no auth settings the API refuses to start, so a
-server that forgets `APP_ENV` never runs open.
+API with `APP_ENV=local` set explicitly, e.g. `APP_ENV=local uv run python -m app --reload`
+(the API logs a warning). With `APP_ENV` unset the API refuses to start with no auth settings, and
+also with the `.env.example` client and key, so a server that forgets `APP_ENV` never runs open or
+on credentials anyone can read. Locally, always start it with `APP_ENV=local`.
 
 ### Step 3 — Start the database
 
@@ -107,10 +108,12 @@ schedule (cron) in production.
 ### Step 6 — Start the API
 
 ```bash
-uv run uvicorn app.main:app --reload
+APP_ENV=local uv run python -m app --reload
 ```
 
 Leave this terminal open; it shows each request. `--reload` restarts the API when you save a file.
+`python -m app` runs uvicorn with its `X-Forwarded-For` handling off (see "Rate limit per IP" below);
+`APP_ENV=local` lets the API use the example client from `.env.example`.
 
 ### Step 7 — Try a request
 
@@ -163,8 +166,8 @@ Next time, `docker start acme-db` and continue from Step 4
 | `401 Not authenticated` | Send `Authorization: Bearer <token>` (Step 7), or Authorize in `/docs` |
 | `401 Invalid token` / `401 Token expired` | Get a new token from `/v1/auth/token` (tokens last 1 hour; restarting with a new `JWT_SECRET` or removing the client also invalidates them) |
 | `401 invalid_client` from `/v1/auth/token` | Wrong client_id or secret: locally `local-client` / `local-test-secret` |
-| API won't start: `APP_ENV is not set and there are no auth settings` | Locally without auth, start with `APP_ENV=local uv run uvicorn ...`; otherwise set `AUTH_CLIENTS` and `JWT_SECRET` |
-| API won't start: `Auth settings invalid for APP_ENV=...` | Fix the listed `AUTH_CLIENTS` / `JWT_SECRET` problems (outside `local` the example values from `.env.example` are refused) |
+| API won't start: `APP_ENV is not set and there are no auth settings` | Locally without auth, start with `APP_ENV=local uv run python -m app`; otherwise set `AUTH_CLIENTS` and `JWT_SECRET` |
+| API won't start: `Auth settings invalid for APP_ENV=...` | Fix the listed `AUTH_CLIENTS` / `JWT_SECRET` problems (outside `local` the example values from `.env.example` are refused). `APP_ENV=(not set)`: locally, start with `APP_ENV=local` |
 | API returns `[]` | No data for that dealer in that month (the sample data is for the current month): re-run Step 5, use dealer `6100000001` |
 | `422` from API 1 | `month` (1–12) and `year` (2000–2100) are required along with `dealer_code` |
 | `uv: command not found` | Close and reopen the terminal after installing uv |
@@ -228,12 +231,15 @@ tables once (also run it after pulling changes to `sql/001_init.sql`; it upgrade
 uv run python -m ingestion.run init-db
 ```
 
-Run the API (hide the server header; one worker per CPU core):
+Run the API (one worker per CPU core; `python -m app` hides the server header and turns off
+uvicorn's own `X-Forwarded-For` handling):
 
 ```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-server-header \
-  --proxy-headers --forwarded-allow-ips=<nginx/load balancer address>
+APP_ENV=<env> uv run python -m app --host 0.0.0.0 --port 8000 --workers 4
 ```
+
+Set `TRUSTED_PROXIES` to the nginx / load balancer address(es) in front of it (below). If the platform
+must call uvicorn directly, use `uvicorn app.main:app ... --no-server-header --no-proxy-headers`.
 
 Each worker keeps up to `DB_POOL_MAX` (default 10) database connections. Requests over 4 KB get
 413, invalid ones 422, and if the database pool is exhausted the API answers 503 with `Retry-After`.
@@ -244,8 +250,14 @@ IP in a second get `429 Too many requests` with `Retry-After: 1`; `/health` is n
 The client server, and k6 at 1,700/s showed no 429s and no slowdown. Counts are kept in Redis when
 `REDIS_URL` is set (exact across workers and servers, independent of `CACHE_ENABLED`); without Redis,
 or while it is down, each worker counts on its own. `RATE_LIMIT_ENABLED=false` turns it off.
-`--proxy-headers --forwarded-allow-ips` make the client IP the caller's (from `X-Forwarded-For`)
-rather than the proxy's; without them every caller shares one count. `POST /v1/auth/token` has its
+The client IP is the connection's address. Behind nginx or a load balancer, set `TRUSTED_PROXIES`
+to its address(es) (IPs or CIDRs, comma-separated, e.g. `10.0.0.5` or `172.18.0.0/16` for a Docker
+network): `X-Forwarded-For` is then read right to left and the first address that is not a trusted
+proxy is the caller, so an entry the caller wrote itself is never used. Without `TRUSTED_PROXIES`,
+`X-Forwarded-For` is ignored and every caller behind the proxy shares one count. nginx must append
+the address it received from: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+Start the API with `python -m app` (or uvicorn with `--no-proxy-headers`): uvicorn's own handling,
+on by default, trusts 127.0.0.1 and would let anything on the same machine choose its IP. `POST /v1/auth/token` has its
 own, lower limit on top: `TOKEN_RATE_LIMIT_PER_MINUTE` (default 30) per IP per minute.
 
 **Authentication (OAuth2 client credentials + JWT, `app/security.py`):** a caller sends its
@@ -271,7 +283,7 @@ uv run python -m app.security new-jwt-secret     # prints a JWT_SECRET
 Rotating `JWT_SECRET` without downtime: move the current value to `JWT_PREVIOUS_SECRET`, set a new
 `JWT_SECRET`, restart, and remove `JWT_PREVIOUS_SECRET` after one `JWT_TTL_SECONDS`.
 Outside `APP_ENV=local` the API refuses to start unless `AUTH_CLIENTS` and `JWT_SECRET` are set and
-valid, and it refuses the local example values from `.env.example`.
+valid, and it refuses the local example values from `.env.example`, also when `APP_ENV` is not set.
 
 Cron (e.g. every 30 minutes):
 
@@ -307,6 +319,16 @@ How it loads quickly (a month has ~530 files of ~15 MB):
 - Measured on SAP export files from a laptop: about 6 s per file (download-bound, ~3 MB/s),
   against about 30 s before; saving takes 0.3–0.5 s per file. More workers don't help on a
   connection that is already full.
+- Memory: each file is held in memory while it is parsed and saved, together with the next
+  `LOADER_WORKERS` files. A real file (~5,500 rows) peaks at about 40 MB; a 50,000-row file at about
+  360 MB, so up to ~1.8 GB with the default 4 workers. Lower `LOADER_WORKERS` if files grow that large.
+- Both month folders are read (`…/2026/01/` and `…/2026/1/`), so neither is missed if both exist.
+- A file that can't be read at all (not UTF-8, missing columns, not a workbook) is read once more and
+  then recorded as failed with no rows (`ingested_files.status = 'failed'`, `row_count = 0`); like a
+  file with bad rows, it is not retried until SAP re-uploads it or the month is reloaded. A failed
+  download is not recorded, so the next run tries again. Numbers such as `NaN` or `Infinity` make the
+  row bad instead of being stored.
+- `TIMEZONE` (default `Asia/Kolkata`) decides the current month when `--year`/`--month` are not given.
 - Only one run at a time: a run that finds another still going (e.g. a long backfill when the next
   cron run starts) logs a warning and stops.
 - `--limit N` loads only the first N new files (for testing); each file's log line shows its read
@@ -352,14 +374,17 @@ For DevOps, per environment:
 4. `DOCS_ENABLED`: `true` for dev and UAT, `false` for prod (the template defaults to `true`, so
    set it explicitly there). Swagger UI is served by the API itself at `/docs`; after deploying,
    `/docs` should return 200 on dev/UAT and `/docs` and `/openapi.json` 404 on prod. The page loads
-   its scripts from `cdn.jsdelivr.net`.
+   one pinned Swagger UI release (`app/docs.py`) from `cdn.jsdelivr.net` with integrity hashes, so the
+   browser refuses the files if the CDN ever serves different ones.
 5. Give the cron job the same settings as the API (database, GCS and, for the cache,
    `CACHE_ENABLED` and `REDIS_URL`).
 6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`. Each loader run
    also adds tables or indexes from newer releases (e.g. API 1's dealer index), so no extra step after
    an upgrade, but run `init-db` once right after deploying one so the API is fast before the next load.
-7. Rate limit: start uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy address>` (above) and
-   make the proxy send `X-Forwarded-For`; set `RATE_LIMIT_PER_SECOND` only to change the 2,500 default.
+7. Rate limit: start the API with `python -m app` (above), set `TRUSTED_PROXIES` to the nginx / load
+   balancer address(es) and make nginx append `X-Forwarded-For` (`$proxy_add_x_forwarded_for`); set
+   `RATE_LIMIT_PER_SECOND` only to change the 2,500 default. **Changed 2026-10-16:** the old
+   `--proxy-headers --forwarded-allow-ips` start command no longer decides the client IP.
 8. Upgrading to the release that adds `NextSlabRate` (2026-10-15): run `init-db` **before** starting the
    new API. It adds the `next_slab_rate` column and fills it for rows already loaded (from each
    row's stored SAP data); the new API fails with 500 until the column exists. Cached responses

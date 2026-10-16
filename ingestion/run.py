@@ -25,7 +25,7 @@ from psycopg.rows import dict_row
 
 from app.cache import bump_data_version
 from app.config import get_settings
-from ingestion.excel import read_rows
+from ingestion.excel import read_table
 from ingestion.load import is_loaded, save_scheme_file
 from ingestion.schemes import check_columns, to_record
 from ingestion.sources import SourceFile, list_files, month_prefixes
@@ -60,6 +60,8 @@ def load_schemes(
 
     A file with rows that can't be read is read once more; if rows are still bad, its good rows are
     saved and the file is recorded as failed (counted in files_failed), so it is not retried.
+    A file that can't be read at all (not UTF-8, missing columns, not a workbook) is also read once
+    more, then recorded as failed with no rows, so it is not downloaded again on every run.
 
     stats and done carry a run across reconnects: counts are added as each file finishes, and the
     paths of files dealt with (skipped, loaded or failed) are kept in done, so a retry neither
@@ -71,15 +73,16 @@ def load_schemes(
     settings = get_settings()
     stats = Counter() if stats is None else stats
     done = set() if done is None else done
+    # Every candidate folder is read ("…/01/" and "…/1/"): if both exist, neither is left out.
     files = []
-    for prefix in month_prefixes(settings.scheme_prefix_template, year, month):
-        files = list_files(prefix)
-        if files:
-            log.info("Reading %d files from %s", len(files), prefix)
-            break
-    else:
-        log.warning("No scheme files yet for %d-%02d (looked in %s)", year, month,
-                    ", ".join(month_prefixes(settings.scheme_prefix_template, year, month)))
+    prefixes = month_prefixes(settings.scheme_prefix_template, year, month)
+    for prefix in prefixes:
+        found = [file for file in list_files(prefix) if file.path not in {f.path for f in files}]
+        if found:
+            log.info("Reading %d files from %s", len(found), prefix)
+            files.extend(found)
+    if not files:
+        log.warning("No scheme files yet for %d-%02d (looked in %s)", year, month, ", ".join(prefixes))
     files = [file for file in files if file.path not in done]  # dealt with earlier in this run
     todo = [file for file in files if reload or not is_loaded(conn, "scheme", file)]
     stats["files_skipped"] += len(files) - len(todo)
@@ -91,11 +94,16 @@ def load_schemes(
     def prepare(file: SourceFile) -> tuple[list[dict], Counter, float]:
         started = time.monotonic()
         # Bad rows are logged one by one only from the read that is kept, so each appears once.
-        records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows,
-                                            log_rows=False)
-        if counts["rows_bad"]:
-            # Read (download) the file once more, in case the first copy was damaged.
-            log.warning("%s: %d rows could not be read; reading the file again", file.path, counts["rows_bad"])
+        try:
+            records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows,
+                                                log_rows=False)
+            problem = f"{counts['rows_bad']} rows could not be read" if counts["rows_bad"] else None
+        except UnreadableFile as exc:
+            problem = f"the file could not be read ({exc})"
+        if problem:
+            # Read (download) the file once more, in case the first copy was damaged. If it is still
+            # unreadable, UnreadableFile reaches the loop below, which records the file as failed.
+            log.warning("%s: %s; reading the file again", file.path, problem)
             records, counts = parse_scheme_file(file.read(), file.path, year, month, settings.scheme_header_rows)
         return records, counts, time.monotonic() - started
 
@@ -110,6 +118,15 @@ def load_schemes(
                 save_scheme_file(conn, file, year, month, records, counts["rows_bad"])
             except psycopg.OperationalError:
                 raise  # connection lost: main() reconnects and retries this file
+            except UnreadableFile as exc:
+                # Unreadable on both reads: recorded as failed with no rows, so later runs skip it
+                # until SAP re-uploads it (or --reload); download errors are not this and are retried.
+                log.error("%s could not be read after reading it again (%s); the file is marked failed",
+                          file.path, exc)
+                save_scheme_file(conn, file, year, month, [], failed=True)
+                stats["files_failed"] += 1
+                done.add(file.path)
+                continue
             except Exception:
                 log.exception("Failed to load %s", file.path)
                 stats.update(counts)
@@ -142,11 +159,15 @@ def parse_scheme_file(
     content: bytes, path: str, year: int, month: int, header_rows: int, log_rows: bool = True,
 ) -> tuple[list[dict], Counter]:
     """One SAP file's rows for the 8 template components, plus counts of rows left out.
-    With log_rows, each skipped row is logged with the reason."""
+    With log_rows, each skipped row is logged with the reason. Raises UnreadableFile if the file
+    can't be parsed at all or lacks the expected columns (checked even when it has no data rows)."""
     counts: Counter = Counter()
-    rows = read_rows(content, path, header_rows)
-    if rows:
-        check_columns(rows[0].keys())
+    try:
+        columns, grid = read_table(content, path, header_rows)
+        check_columns(columns)
+        rows = [dict(zip(columns, row)) for row in grid]
+    except Exception as exc:  # the bytes are already downloaded, so this is the file's content
+        raise UnreadableFile(f"{type(exc).__name__}: {exc}") from exc
     records = []
     for number, row in enumerate(rows, start=1):
         try:
@@ -161,6 +182,10 @@ def parse_scheme_file(
         else:
             records.append(record)
     return records, counts
+
+
+class UnreadableFile(Exception):
+    """A downloaded file that can't be parsed as a whole (encoding, columns, format)."""
 
 
 def prefetched(pool: ThreadPoolExecutor, items: Iterable, work: Callable, ahead: int) -> Iterator[tuple[object, Future]]:

@@ -112,6 +112,7 @@ def test_bearer_token_is_enforced_when_configured(client, repo):
 
 @pytest.mark.parametrize("month, expected", [
     ("9", 9), ("09", 9), ('"9"', 9), ('"09"', 9), ("01", 1), ("10", 10), ("12", 12), ('"12"', 12),
+    ("1", 1), ('"1"', 1), ('"01"', 1), ("11", 11), ('"10"', 10), ('"11"', 11),
 ])
 def test_month_as_one_or_two_digits_is_accepted(client, repo, month, expected):
     raw = '{"dealer_code": "1001", "month": %s, "year": 2026}' % month
@@ -122,6 +123,7 @@ def test_month_as_one_or_two_digits_is_accepted(client, repo, month, expected):
 
 @pytest.mark.parametrize("month", [
     "009", '"009"', '"010"',                       # more than two digits
+    "010", "0010", '"0010"', '"012"', "0012",      # QA 2026-10-16: only 1-9, 01-09, 10, 11, 12
     "-9", "-09", '"-9"', '"+9"',                   # signs
     "9.0", '"9.0"', "09.5", "1e1",                 # decimals and exponents
     "0", "00", '"0"', '"00"', "13", '"13"',        # outside 1-12
@@ -132,6 +134,15 @@ def test_month_other_than_1_to_12_in_one_or_two_digits_returns_422(client, repo,
     response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": "application/json"})
     assert response.status_code == 422
     assert repo.calls == []
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "Application/JSON", "APPLICATION/JSON; charset=utf-8"])
+def test_zero_padded_month_works_whatever_the_content_type_case(client, repo, content_type):
+    """QA 2026-10-16 #8: media types are case-insensitive, so "month": 09 must not depend on it."""
+    raw = '{"dealer_code": "1001", "month": 09, "year": 2026}'
+    response = client.post("/v1/schemes/current-month", content=raw, headers={"Content-Type": content_type})
+    assert response.status_code == 200
+    assert repo.calls == [("1001", 2026, 9)]
 
 
 def test_padding_does_not_rescue_otherwise_bad_bodies(client, repo):

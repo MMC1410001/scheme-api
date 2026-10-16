@@ -9,6 +9,7 @@ from psycopg_pool import PoolTimeout
 
 from app import cache, db
 from app.config import APP_ENV, get_settings
+from app.docs import docs_router
 from app.middleware import (
     SECURITY_HEADERS, BodySizeLimitMiddleware, LenientJsonNumbersMiddleware, SecurityHeadersMiddleware,
 )
@@ -31,13 +32,18 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 # Auth is off only on a developer's machine (APP_ENV=local set explicitly) with no auth settings; a
 # deploy that forgets APP_ENV refuses to start rather than run open. Anywhere else, or once any auth
-# setting is given, it must be complete and strong or the API refuses to start.
-if os.environ.get("APP_ENV") is None and not (settings.auth_clients or settings.jwt_secret):
+# setting is given, it must be complete and strong or the API refuses to start. The published
+# .env.example client and key are accepted only with APP_ENV=local set explicitly, so a server that
+# forgets APP_ENV cannot run on credentials anyone can read.
+EXPLICIT_APP_ENV = os.environ.get("APP_ENV")
+if EXPLICIT_APP_ENV is None and not (settings.auth_clients or settings.jwt_secret):
     raise RuntimeError("APP_ENV is not set and there are no auth settings: set AUTH_CLIENTS and JWT_SECRET, "
                        "or APP_ENV=local to run without auth on your machine")
 if APP_ENV != "local" or settings.auth_clients or settings.jwt_secret:
-    if problems := config_problems(settings, APP_ENV):
-        raise RuntimeError(f"Auth settings invalid for APP_ENV={APP_ENV}: " + "; ".join(problems))
+    if problems := config_problems(settings, EXPLICIT_APP_ENV or "(not set)"):
+        raise RuntimeError(f"Auth settings invalid for APP_ENV={EXPLICIT_APP_ENV or '(not set)'}: "
+                           + "; ".join(problems) + ("" if EXPLICIT_APP_ENV else
+                           " (set APP_ENV=local to use the .env.example values on your machine)"))
 else:
     log.warning("Auth is OFF (APP_ENV=local with no AUTH_CLIENTS/JWT_SECRET)")
 app = FastAPI(
@@ -45,7 +51,7 @@ app = FastAPI(
     version="0.1.0",
     description="Scheme data (from SAP files in GCS) for the client team.",
     lifespan=lifespan,
-    docs_url="/docs" if settings.docs_enabled else None,
+    docs_url=None,  # served by app.docs (pinned Swagger UI with integrity hashes) when docs are on
     openapi_url="/openapi.json" if settings.docs_enabled else None,
     redoc_url=None,
     # "/v1/schemes/current-month/" is a 404, not a 307 to the path without the slash: behind a proxy
@@ -59,11 +65,15 @@ app.add_middleware(LenientJsonNumbersMiddleware)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
 if settings.rate_limit_enabled:
     app.add_middleware(RateLimitMiddleware, limit=settings.token_rate_limit_per_minute, window_seconds=60,
-                       paths={TOKEN_URL}, name="token", redis_url=settings.redis_url)
-    app.add_middleware(RateLimitMiddleware, limit=settings.rate_limit_per_second, redis_url=settings.redis_url)
+                       paths={TOKEN_URL}, name="token", redis_url=settings.redis_url,
+                       trusted_proxies=settings.trusted_proxies)
+    app.add_middleware(RateLimitMiddleware, limit=settings.rate_limit_per_second, redis_url=settings.redis_url,
+                       trusted_proxies=settings.trusted_proxies)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(router)
+if settings.docs_enabled:
+    app.include_router(docs_router)
 
 
 @app.exception_handler(RequestValidationError)

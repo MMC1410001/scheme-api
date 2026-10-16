@@ -4,8 +4,8 @@
 |---|---|
 | Project | Scheme API (API 1: monthly schemes) |
 | Consumer | Client team |
-| Version | 0.7 (draft) — API 1 only; the API refuses to start without auth when `APP_ENV` is unset (0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
-| Date | 15 October 2026 |
+| Version | 0.8 (draft) — API 1 only; QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI (0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
+| Date | 16 October 2026 |
 | Author | Project team |
 | Status | API 1 built and tested on sample and real SAP data. |
 
@@ -105,7 +105,7 @@ returns it to the client's systems on request.
 | Content | Only the rows SAP updated on that day (not a full snapshot); one file contains many dealers |
 | Components | 66 different components ("Comp desc"); 8 are used |
 | Row identity | Customer + Agreement + Deal Suffix + validity period (Valid from, To) |
-| Dates | DD/MM/YYYY; empty dates appear as 00/00/0000 |
+| Dates | DD/MM/YYYY (DD.MM.YYYY and DD-MM-YYYY are also read); empty dates appear as 00/00/0000 |
 | Numbers | Trailing spaces; negative numbers have the minus sign at the end, e.g. `882.00-` |
 
 SAP columns used by API 1:
@@ -166,11 +166,11 @@ These assumptions were made while building the solution. Please confirm or corre
 
 | ID | Assumption | Basis |
 |---|---|---|
-| A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as one or two digits, so `09` is accepted). A month whose SAP exports have not been loaded returns an empty list. The cron job loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month) |
+| A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as `1`–`9`, `01`–`09`, `10`, `11` or `12`; longer forms such as `010` or `0010` are rejected). A month whose SAP exports have not been loaded returns an empty list. The cron job loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month) |
 | A-2 | A row belongs to every month its validity period overlaps, not to the folder its file is in. A month folder can also hold SAP updates of the previous month's schemes, so the folder month is not used. A scheme running across two months is reported in both. | Decided 2026-10-15 (was: folder month) |
 | A-3 | The API template's date headers are swapped (the column labelled "To Date" holds start dates). The API returns `FromDate` = SAP "Valid from" and `ToDate` = SAP "To". | Template sample values |
 | A-4 | The template is the final output, plus `NextSlabRate` (SAP "Next Slab Rate"), added after it as the last field of each row on 2026-10-15. Prepaid rate and customer name (from the first discussion) are not returned; "Rebate rate" is taken to be the rate that was meant. | Template confirmed; next slab rate requested 2026-10-15 |
-| A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. If SAP ever corrects a row's dates, the old period stays stored and is returned for the months it overlaps (decided 2026-10-15). | Sample file analysis: validity periods are fixed per scheme, not moved daily |
+| A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. If SAP ever corrects a row's dates, the old period stays stored and is returned for the months it overlaps (decided 2026-10-15, re-confirmed as the business rule 2026-10-16). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme, not moved daily |
 | A-6 | "Last Updated" times from SAP use one time zone and can be compared across files. | Single SAP system |
 | A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). If SAP renames a component, the list in `app/constants.py` must be updated. | Look-alikes such as `ALWD EB2` and `ADDTNL PREMIUM 01` must be excluded |
 | A-8 | Qualification uses GSR (Q) for EB SLAB 1–3 and VALUE, and Invoiced Quantity (Q) for LUXURY, PREMIUM 01 and PREMIUM 02. EB FULL MONTH follows the EB slab working: SAP leaves its GSR (Q) empty, and on slab rows GSR (Q) always equals GSR (B), so its Qualification is GSR (B). Real sample: GSR (Q) = GSR (B) on every slab row; GSR (Q) empty on every EB FULL MONTH row. | Discussion and template values |
@@ -178,14 +178,17 @@ These assumptions were made while building the solution. Please confirm or corre
 | A-10 | If a dealer has more than one agreement, one row per agreement per component is returned. The sample data has one agreement per dealer. | Sample file analysis |
 | A-11 | An unknown dealer, or a dealer without data in the requested month, returns `200` with an empty list, not `404`. | Simplest for consumers |
 | A-12 | The API uses `POST` with a JSON body, and response fields use PascalCase like the existing dealer APIs. | Discussion; existing Acme APIs |
-| A-13 | SAP exports are in bucket `acme-scheme-files`, folder `sap-exports/<year>/<month>/` (confirmed: `sap-exports/2026/10`). Folders for January–September are assumed to be `01`–`09`; the job falls back to `1`–`9` if those don't exist. | Path confirmed |
-| A-14 | Callers authenticate with OAuth2 client credentials: each caller (the client, QA) gets a `client_id` and `client_secret` per environment, exchanges them at `POST /v1/auth/token` for a JWT Bearer token valid for 1 hour, and reuses it until shortly before it expires. Outside local development the API does not start without auth settings; auth can be off only when `APP_ENV=local` is set explicitly, so a server that forgets `APP_ENV` does not run open. Locally the client is `local-client` / `local-test-secret` (matching the Postman Local environment). The `X-API-Key` header is no longer accepted. | Decided 2026-10-15 (was: optional `X-API-Key`); security review (explicit `APP_ENV=local` for auth off: security review of 15 October 2026) |
+| A-13 | SAP exports are in bucket `acme-scheme-files`, folder `sap-exports/<year>/<month>/` (confirmed: `sap-exports/2026/10`). Folders for January–September are assumed to be `01`–`09`; the job also reads `1`–`9`, so if both exist neither is missed (changed 2026-10-16: it used to stop at the first one). | Path confirmed; QA audit 2026-10-16 |
+| A-14 | Callers authenticate with OAuth2 client credentials: each caller (the client, QA) gets a `client_id` and `client_secret` per environment, exchanges them at `POST /v1/auth/token` for a JWT Bearer token valid for 1 hour, and reuses it until shortly before it expires. Outside local development the API does not start without auth settings; auth can be off only when `APP_ENV=local` is set explicitly, so a server that forgets `APP_ENV` does not run open. Locally the client is `local-client` / `local-test-secret` (matching the Postman Local environment); these published values are accepted only with `APP_ENV=local` set explicitly (added 2026-10-16), so a server that forgets `APP_ENV` cannot run on them either. The `X-API-Key` header is no longer accepted. | Decided 2026-10-15 (was: optional `X-API-Key`); security review (explicit `APP_ENV=local` for auth off: security review of 15 October 2026) |
 | A-15 | The project team's existing PostgreSQL database is used. A separate database can be created quickly if needed. | Decision in discussion |
 | A-16 | The cron job runs every 30 minutes; SAP exports arrive several times a day. | ~550 files a month |
-| A-17 | HTTPS termination is provided by the hosting gateway or load balancer. The API itself limits each client IP to 2,500 requests a second (added 2026-10-15); the proxy passes the caller's IP in `X-Forwarded-For`. | Standard deployment; rate limit requested 2026-10-15 |
+| A-17 | HTTPS termination is provided by the hosting gateway or load balancer. The API itself limits each client IP to 2,500 requests a second (added 2026-10-15). The proxy appends the caller's IP to `X-Forwarded-For`, and its address is listed in `TRUSTED_PROXIES`; `X-Forwarded-For` from any other address is ignored, so a caller cannot choose its own IP (changed 2026-10-16). | Standard deployment; rate limit requested 2026-10-15; QA audit 2026-10-16 |
 | A-18 | Expected load is modelled as 150 concurrent users, as in the existing dealer API tests. Actual client call volumes are not known. | Existing test practice |
 | A-19 | Only `.csv` and `.xlsx` files are loaded from GCS. | Formats seen so far |
 | A-20 | EB amounts are running totals from the 1st of the month: EB SLAB 1 (e.g. 1–10 Oct, 10 lakh) is included in EB SLAB 2 (1–15 Oct, 12 lakh), so 2 lakh were added, not 22 lakh in total. The API returns each row as SAP sends it and never adds rows together; a newer SAP update of the same row replaces it. Consumers must not sum the slabs. | Confirmed by the team; real sample: EB amounts never decrease from slab to slab (every dealer checked) |
+| A-21 | A row with no end date ("To" empty) counts as valid for its start day only, so it is returned only for the month of its "Valid from". | Confirmed correct 2026-10-16 |
+| A-22 | SAP dates use `/`, `.` or `-` between day, month and year. Dates written with spaces (`01 08 2026`) are not read: such a row is bad and its file is marked failed. | Decided 2026-10-16 (not supported for now) |
+| A-23 | Amounts are finite numbers. `NaN` or `Infinity` in an amount column makes the row bad instead of being stored. | QA audit 2026-10-16 |
 
 ## 8. Open questions and dependencies
 
@@ -232,8 +235,10 @@ cannot break the API.
 
 The cron job runs `python -m ingestion.run schemes`.
 Each run reads the current month's folder, `gs://acme-scheme-files/sap-exports/<year>/<month>/`
-(for example `.../2026/10/`, then `.../2026/11/`). Months 1–9 are tried as `01` first, then `1`,
-and the job logs a warning if the folder has no files yet. The API itself never reads GCS: it only
+(for example `.../2026/10/`, then `.../2026/11/`). Months 1–9 are read from both `01` and `1`
+(if both exist, files from both are loaded), and the job logs a warning if neither has files yet.
+Without `--year`/`--month` the job loads the current month in India time (`TIMEZONE`, default
+`Asia/Kolkata`). The API itself never reads GCS: it only
 reads the database the job keeps up to date.
 
 ![Figure 4 — Ingestion job: what happens to each file](figures/fig4_ingestion_flow.png)
@@ -260,10 +265,17 @@ Key design points:
   a long backfill); it is released when the run's connection closes, even if the process dies.
   After a network drop the server may keep the old session (and the lock) alive; the run names its
   sessions, so on reconnect it ends its own stale session and carries on.
-- **Fail loudly on format changes.** If a required column is missing, the file fails with an error
-  that lists the missing and available columns; nothing is loaded from it.
-- **Row-level tolerance.** A row with an unparseable value is skipped and logged; the rest of the
-  file loads.
+- **Fail loudly on format changes.** If a required column is missing (checked even when the file
+  has only a header), the file isn't UTF-8, or it isn't a readable workbook, the file is read once
+  more; if it still can't be read, it is recorded as `failed` with no rows (`row_count = 0`), the
+  error lists the missing and available columns, the run exits with code 1, and the file is not
+  retried until SAP re-uploads it or the month is reloaded. A failed download is not recorded, so
+  the next run tries it again.
+- **Row-level tolerance.** A row with an unparseable value (including `NaN` or `Infinity` in an
+  amount) is skipped and logged; the rest of the file loads.
+- **Memory.** Each file is held in memory while it is parsed and saved, with the next
+  `LOADER_WORKERS` files: a real file (~5,500 rows) peaks at about 40 MB, a 50,000-row file at about
+  360 MB (up to ~1.8 GB with 4 workers). Lower `LOADER_WORKERS` if files grow that large.
 - **Summary log.** Each run logs files loaded/skipped/failed and rows loaded/dropped/bad, and exits
   with code 1 if any file failed (so the scheduler can alert).
 
@@ -311,7 +323,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 | Field | Type | Rules |
 |---|---|---|
 | `dealer_code` | string or number | Required; letters and digits; 1–20 characters; leading zeros and surrounding spaces ignored |
-| `month` | integer or numeric string | Required; 1–12 as one or two digits (`9`, `09`, `"9"`, `"09"`); negatives, decimals, `0`, `009`, `true`/`false` and text are rejected (422) |
+| `month` | integer or numeric string | Required; `1`–`9`, `01`–`09`, `10`, `11`, `12`, as numbers or strings (`9`, `09`, `"9"`, `"09"`); negatives, decimals, `0`, `009`, `010`, `0010`, `true`/`false` and text are rejected (422). A bare `09` works with any case of `Content-Type: application/json` |
 | `year` | integer or numeric string | Required; four digits, 2000–2100 (`2026` or `"2026"`); signs, decimals, spaces and `02026` are rejected (422) |
 
 ### 13.2 API 1 — `POST /v1/schemes/current-month`
@@ -417,7 +429,7 @@ Token endpoint (`POST /v1/auth/token`) errors:
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `invalid_request` | `grant_type` missing; body not form-encoded or JSON, or unreadable; a parameter repeated; credentials in both Basic auth and the body |
+| 400 | `invalid_request` | `grant_type` missing; body not form-encoded or JSON, or unreadable; a parameter repeated (form field or JSON key); credentials in both Basic auth and the body |
 | 400 | `unsupported_grant_type` | `grant_type` other than `client_credentials` |
 | 400 | `invalid_scope` | `scope` other than `schemes:read` |
 | 401 | `invalid_client` | Missing, unknown or wrong client credentials (an unknown client and a wrong secret give the same answer); `WWW-Authenticate: Basic` |
@@ -431,7 +443,7 @@ Token endpoint (`POST /v1/auth/token`) errors:
 | Client secrets | Stored only as SHA-256 hashes (`AUTH_CLIENTS`); compared in constant time; an unknown client and a wrong secret are indistinguishable (same error, same timing); secrets are never logged (only the client_id) |
 | Token validation | Algorithm pinned to HS256 (`alg: none` and other algorithms rejected); `iss`, `aud`, `sub`, `iat`, `nbf`, `exp`, `jti` required; 30 s clock-skew leeway; `schemes:read` scope required (403 without it); no database or Redis lookup (~49 µs) |
 | Revocation and key rotation | Removing a client from `AUTH_CLIENTS` revokes its tokens at once. `JWT_SECRET` rotates without downtime: the old key moves to `JWT_PREVIOUS_SECRET` for one token lifetime |
-| Safe start-up | Outside `APP_ENV=local` the API refuses to start unless `AUTH_CLIENTS` and `JWT_SECRET` are set and strong (32+ characters), and it refuses the example values from `.env.example`. Locally (`APP_ENV=local` set explicitly) with no auth settings, auth is off and a warning is logged; with `APP_ENV` unset and no auth settings the API refuses to start, so a deploy that forgets `APP_ENV` never runs open |
+| Safe start-up | Outside `APP_ENV=local` the API refuses to start unless `AUTH_CLIENTS` and `JWT_SECRET` are set and strong (32+ characters), and it refuses the example values from `.env.example`, also when `APP_ENV` is not set. Locally (`APP_ENV=local` set explicitly) with no auth settings, auth is off and a warning is logged; with `APP_ENV` unset and no auth settings the API refuses to start, so a deploy that forgets `APP_ENV` never runs open |
 | Token endpoint abuse | Separate per-IP limit, `TOKEN_RATE_LIMIT_PER_MINUTE` (30/min); token responses are never cached (`Cache-Control: no-store`, `Pragma: no-cache`) |
 | Input validation | `dealer_code`: letters and digits, 1–20 characters; `month` 1–12 as one or two digits and `year` 2000–2100 as four digits (no booleans, signs, decimals or spaces); strict JSON parsing, except that a bare zero-padded month such as `09` is accepted |
 | SQL injection | All queries are parameterised; no user input is ever formatted into SQL |
@@ -441,6 +453,8 @@ Token endpoint (`POST /v1/auth/token`) errors:
 | Overload protection | Bounded DB connection pool; 503 + Retry-After when exhausted; per-IP rate limit (429) |
 | Data exposure | Fixed response model; raw SAP columns are stored but never returned |
 | Transport and rate limits | HTTPS at the gateway (assumption A-17); per-IP rate limit in the API: 2,500 requests/s per IP, then 429 + `Retry-After` (counted in Redis across workers, per worker without it; `/health` exempt) |
+| Client IP | The connection's address, unless it is a proxy listed in `TRUSTED_PROXIES`; then the right-most `X-Forwarded-For` entry that is not a trusted proxy. The API is started with `python -m app`, which turns off uvicorn's own `X-Forwarded-For` handling (it trusts 127.0.0.1 by default), so a caller cannot get a fresh rate limit by sending a made-up `X-Forwarded-For` |
+| Docs page | Swagger UI (`/docs`, when `DOCS_ENABLED=true`) loads one pinned `swagger-ui-dist` release (5.32.15) from the CDN with Subresource Integrity (SHA-384) hashes, and its Content-Security-Policy allows only that release, so a changed CDN file is refused by the browser |
 | Secrets | Client secret hashes, `JWT_SECRET` and DB credentials come from environment variables or the environment's `.env.<env>` file, which is never committed |
 
 ## 16. Configuration
@@ -460,15 +474,17 @@ are available for per-environment releases.
 | `JWT_PREVIOUS_SECRET` | — | Old signing key while rotating: move `JWT_SECRET` here, set a new `JWT_SECRET`, remove this after one `JWT_TTL_SECONDS` |
 | `JWT_TTL_SECONDS` | `3600` | Access token lifetime (60–86,400) |
 | `TOKEN_RATE_LIMIT_PER_MINUTE` | `30` | `POST /v1/auth/token` requests per client IP per minute before 429 |
+| `TRUSTED_PROXIES` | empty | nginx / load balancer address(es), IPs or CIDRs, comma-separated, whose `X-Forwarded-For` is believed; empty ignores the header (every caller behind the proxy then shares one rate-limit count). Set per environment by DevOps |
 | `DOCS_ENABLED` | `true` | Serve `/docs` and `/openapi.json` |
 | `DB_POOL_MAX` | `10` | DB connections per worker process |
 | `GCS_BUCKET` | `acme-scheme-files` | Bucket with the files |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | Service-account key file for GCS |
 | `GCS_PROJECT` | — | Optional Google Cloud project for the GCS client; reading the bucket works without it |
 | `SCHEME_PREFIX_TEMPLATE` | `sap-exports/{year}/{month:02d}/` | Folder of a month's SAP exports (tries `01`, then `1`) |
-| `APP_ENV` | `local` | Which settings file to read: `.env.local`, `.env.dev`, `.env.uat` or `.env.prod`. Set it on every server; with `APP_ENV` unset the API starts only if auth is configured |
+| `APP_ENV` | `local` | Which settings file to read: `.env.local`, `.env.dev`, `.env.uat` or `.env.prod`. Set it on every server; with `APP_ENV` unset the API starts only if auth is configured and is not the `.env.example` example |
 | `LOCAL_DATA_DIR` | — | Read files from a local folder instead of GCS (development) |
 | `LOADER_WORKERS` | `4` | Files the cron job downloads and parses in parallel while saving the current one |
+| `TIMEZONE` | `Asia/Kolkata` | Decides the cron job's default month (the current month in this timezone); the API always takes the month from the request |
 | `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 18.1) |
 | `REDIS_URL` | — | Redis for the cache, e.g. `redis://host:6379/0`; the cache runs only when this is set and `CACHE_ENABLED=true` |
 | `CACHE_TTL_SECONDS` | `900` | Longest a cached response lives; new data replaces it sooner |
@@ -480,7 +496,9 @@ are available for per-environment releases.
 ```
 scheme-api/
 ├── app/                  FastAPI service
+│   ├── __main__.py       `python -m app`: starts uvicorn (proxy headers off)
 │   ├── main.py           app setup, error handlers, /health
+│   ├── docs.py           Swagger UI at /docs, pinned release with SRI
 │   ├── routes.py         API 1 endpoint
 │   ├── schemas.py        request and response models
 │   ├── repository.py     SQL queries (connection pool)
@@ -515,12 +533,18 @@ scheme-api/
 `README.md` (install, sample data, run, try a request, troubleshooting). QA follow the
 step-by-step *QA guide* in `qa/README.md`.
 
-**Run the API** in Dev/Production (one worker per CPU core; server version header disabled):
+**Run the API** in Dev/Production (one worker per CPU core; server version header disabled;
+uvicorn's own `X-Forwarded-For` handling off):
 
 ```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-server-header \
-  --proxy-headers --forwarded-allow-ips=<nginx/load balancer address>
+APP_ENV=<env> uv run python -m app --host 0.0.0.0 --port 8000 --workers 4
 ```
+
+Set `TRUSTED_PROXIES` to the nginx / load balancer address(es) and have nginx append the caller's
+address: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. If the platform must call
+uvicorn directly, use `uvicorn app.main:app … --no-server-header --no-proxy-headers`. Changed
+16 October 2026: the earlier `--proxy-headers --forwarded-allow-ips` command no longer decides the
+client IP.
 
 **Create tables once, then schedule the loader:**
 
@@ -567,7 +591,7 @@ if an API endpoint has no request. A copy is kept in the QA automation repositor
 
 | File | Purpose |
 |---|---|
-| `Scheme_API1_Current_Month.postman_collection.json` | API 1: requests, automatic tests, example responses (58 requests, 278 assertions) |
+| `Scheme_API1_Current_Month.postman_collection.json` | API 1: requests, automatic tests, example responses (65 requests, 308 assertions) |
 | `Local.postman_environment.json` | Local development settings |
 | `Dev.postman_environment.json` | Dev settings (base URL to be filled in) |
 
@@ -576,9 +600,10 @@ The collection has these folders:
 | Folder | Requests |
 |---|---|
 | 1. Health | Health check |
-| 2. (the API) | Dealer code as string, as number, with leading zeros; month/year as strings; zero-padded month (`09`); a month with no data; unknown dealer |
-| 3. Negative cases | Missing month, missing year, month 13, year 1999, boolean month, month/year formats (`-9`, `009`, `9.0`, `02026`, `"+2026"`, …); then missing, empty, whitespace, null, special characters, too long, invalid JSON, wrong method, unknown route |
-| 4. Security | No token, invalid token, SQL injection, script injection, oversized body, security headers |
+| 2. (the API) | Dealer code as string, as number, with leading zeros; month/year as strings; zero-padded month (`09`), also with `Content-Type: Application/JSON`; a month with no data; unknown dealer |
+| 3. Negative cases | Missing month, missing year, month 13, year 1999, boolean month, month/year formats (`-9`, `009`, `010`, `0010`, `9.0`, `02026`, `"+2026"`, …); then missing, empty, whitespace, null, special characters, too long, invalid JSON, wrong method, unknown route |
+| 4. Security | No token, invalid token, SQL injection, script injection, pinned Swagger UI with integrity hashes, oversized body, security headers |
+| 5. Auth | Token endpoint: form, JSON and Basic credentials; wrong or unknown client; bad grant type or scope; a parameter repeated (form or JSON); GET; no caching |
 
 **Swagger spec.** `qa/swagger/` holds an OpenAPI 3.1 file, for Swagger Editor/UI or any
 OpenAPI tool: `Scheme_API1_Current_Month.openapi.json`.
@@ -611,6 +636,33 @@ npx newman run Scheme_API1_Current_Month.postman_collection.json -e Local.postma
 ```
 
 ## 20. Testing and quality results
+
+**QA audit, 16 October 2026 (local, auth on).** Exploratory testing against the Swagger spec, a
+review of the API and loader code, then fixes with regression tests. Full findings: `qa/TEST_RESULTS.md`.
+
+| Suite | Result |
+|---|---|
+| Unit + database tests (pytest) | 349 / 349 passed (66 new regression tests) |
+| Postman / newman — API 1 collection | 308 / 308 assertions passed (65 requests) |
+| Playwright — API 1 + common | 97 passed, 3 skipped of 100 (HTTPS check; API1_TC_69_SEC and COMMON_TC_19_SEC need rate-limit settings; COMMON_TC_19_SEC passed when run on its own) |
+| Swagger UI in Chrome | Authorize → Try it out → 200; pinned files load with their integrity hashes |
+| bandit | No new findings (5 known low-risk notes on example strings in the API docs) |
+
+| Finding (16 October 2026) | Fix |
+|---|---|
+| A made-up `X-Forwarded-For` got a fresh token rate limit (uvicorn trusts 127.0.0.1 by default) | `TRUSTED_PROXIES`; client IP decided by the app; start with `python -m app` |
+| With both `…/01/` and `…/1/` month folders, the second was skipped | Both are read |
+| `NaN` / `Infinity` amounts stored and returned as `null` | The row is bad (counted, logged, file marked failed) |
+| A file that can't be read at all (not UTF-8, missing columns, header only) was downloaded and failed again on every run | Read once more, then recorded as failed; not retried until re-upload or `--reload` |
+| With `APP_ENV` unset, the API started on the published example credentials | Example values need `APP_ENV=local` set explicitly |
+| `"month": 09` failed when `Content-Type` was not lower-case | Media type compared case-insensitively |
+| A JSON token request with a repeated key used the last value | 400 `invalid_request` |
+| A non-numeric cache version in Redis made every cached request fail (500) | The cache is bypassed and the database answers |
+| Swagger UI loaded any 5.x release from the CDN without an integrity check | Pinned release with SRI hashes; CSP limited to it |
+
+Reviewed and kept as designed: an old validity period stays after SAP corrects it (A-5), a row
+without an end date is one day (A-21), dates with spaces are not read (A-22), month and year may be
+sent as strings.
 
 Test run of 15 October 2026 on a local environment (Apple M2, PostgreSQL in Docker, API with
 4 workers and auth enabled, 20,000 test dealers / 160,017 rows). Performance and the ZAP scan were
