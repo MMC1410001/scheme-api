@@ -6,6 +6,8 @@ from fastapi import HTTPException, status
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.docs import SWAGGER_UI_BASE
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -15,10 +17,11 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",  # dealer data must not be cached by proxies or browsers
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 }
-# Swagger UI loads its script and styles from a CDN and starts with an inline script.
+# Swagger UI loads its script and styles from one pinned CDN release (app.docs, which also adds
+# integrity hashes) and starts with an inline script.
 DOCS_CSP = (
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    f"default-src 'self'; script-src 'self' 'unsafe-inline' {SWAGGER_UI_BASE}; "
+    f"style-src 'self' 'unsafe-inline' {SWAGGER_UI_BASE}; "
     "img-src 'self' data: https://fastapi.tiangolo.com; frame-ancestors 'none'"
 )
 
@@ -120,7 +123,8 @@ class LenientJsonNumbersMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        content_type = dict(scope.get("headers", [])).get(b"content-type", b"")
+        # Media types are case-insensitive (RFC 9110): Application/JSON is JSON too.
+        content_type = dict(scope.get("headers", [])).get(b"content-type", b"").lower()
         if scope["type"] != "http" or not content_type.startswith(b"application/json"):
             await self.app(scope, receive, send)
             return

@@ -135,6 +135,14 @@ def _invalid_client() -> OAuthError:
     return OAuthError("invalid_client", "Client authentication failed", status.HTTP_401_UNAUTHORIZED)
 
 
+def _no_repeated_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """json.loads keeps the last of repeated keys; refuse them, as for a repeated form parameter."""
+    data = dict(pairs)
+    if len(data) != len(pairs):
+        raise _invalid_request("A parameter was sent more than once")
+    return data
+
+
 async def _token_params(request: Request) -> dict[str, str]:
     """The token request's parameters: form-encoded as RFC 6749 requires, or a JSON object."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -143,7 +151,7 @@ async def _token_params(request: Request) -> dict[str, str]:
         if content_type == "application/x-www-form-urlencoded":
             pairs = parse_qsl(body.decode(), keep_blank_values=True)
         elif content_type == "application/json":
-            data = json.loads(body)
+            data = json.loads(body, object_pairs_hook=_no_repeated_keys)
             if not isinstance(data, dict) or not all(isinstance(v, str) for v in data.values()):
                 raise _invalid_request("The JSON body must be an object of strings")
             pairs = list(data.items())

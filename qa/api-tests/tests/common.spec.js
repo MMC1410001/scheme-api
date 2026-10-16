@@ -24,6 +24,30 @@ test.describe('Common', () => {
     await ctx.dispose();
   });
 
+  test('COMMON_TC_21_SEC Swagger UI loads one pinned swagger-ui-dist release with integrity hashes that match @security', async ({ playwright }) => {
+    const response = await client().get('/docs');
+    test.skip(response.status() === 404, 'docs are off on this server (DOCS_ENABLED=false)');
+    expect(response.status()).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain('swagger-ui-dist@5/');
+    const assets = [...html.matchAll(/(?:src|href)="(https:\/\/cdn\.jsdelivr\.net\/npm\/swagger-ui-dist@(\d+\.\d+\.\d+)\/[^"]+)" integrity="(sha384-[^"]+)" crossorigin="anonymous"/g)];
+    expect(assets.map((a) => a[1].split('/').pop()).sort()).toEqual(['swagger-ui-bundle.js', 'swagger-ui.css']);
+    const base = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${assets[0][2]}/`;
+    expect(response.headers()['content-security-policy']).toContain(`script-src 'self' 'unsafe-inline' ${base};`);
+    // The browser would refuse a file whose hash differs; check the hashes against the CDN now.
+    const cdn = await playwright.request.newContext();
+    try {
+      for (const [, url, , integrity] of assets) {
+        const file = await cdn.get(url);
+        expect(file.status(), url).toBe(200);
+        const digest = require('crypto').createHash('sha384').update(await file.body()).digest('base64');
+        expect(`sha384-${digest}`, url).toBe(integrity);
+      }
+    } finally {
+      await cdn.dispose();
+    }
+  });
+
   test('COMMON_TC_4_SEC Plain HTTP is redirected or refused (deployed environments only) @security', async ({ playwright }) => {
     test.skip(!BASE_URL.startsWith('https://'), 'local run over http; check on the deployed URL');
     const ctx = await playwright.request.newContext({ maxRedirects: 0 });
@@ -169,6 +193,17 @@ test.describe('Common', () => {
       }
     });
 
+    test('COMMON_TC_20_SEC A JSON parameter sent twice returns 400 invalid_request, even if the last one is right @security', async ({ playwright }) => {
+      const repeated = [
+        `{"grant_type": "client_credentials", "client_id": ${JSON.stringify(CLIENT_ID)}, "client_secret": "wrong-secret-qa", "client_secret": ${JSON.stringify(CLIENT_SECRET)}}`,
+        `{"grant_type": "client_credentials", "client_id": "unknown-client-qa", "client_id": ${JSON.stringify(CLIENT_ID)}, "client_secret": ${JSON.stringify(CLIENT_SECRET)}}`,
+      ];
+      for (const body of repeated) {
+        await tokenCall(playwright, { data: Buffer.from(body), headers: { 'Content-Type': 'application/json' } },
+          (response) => expectOAuthError(response, 400, 'invalid_request'));
+      }
+    });
+
     // Uses up the token limit for this IP for up to a minute, so it runs only when asked:
     //   TOKEN_RATE_LIMIT=30 AUTH_ENABLED=true npx playwright test -g COMMON_TC_19
     test('COMMON_TC_19_SEC More than TOKEN_RATE_LIMIT_PER_MINUTE token requests get 429 with Retry-After @security', async ({ playwright }) => {
@@ -187,6 +222,11 @@ test.describe('Common', () => {
           expect(retryAfter).toBeGreaterThanOrEqual(1);
           expect(retryAfter).toBeLessThanOrEqual(60);
           expect(await response.json()).toEqual({ detail: 'Too many requests' });
+        }
+        // A caller can't get a fresh allowance by naming another IP in X-Forwarded-For (QA 2026-10-16 #1).
+        for (const spoofed of ['1.2.3.4', '203.0.113.9, 198.51.100.7']) {
+          const response = await ctx.post(TOKEN_PATH, { data: bad, headers: { ...FORM, 'X-Forwarded-For': spoofed } });
+          expect(response.status(), `X-Forwarded-For: ${spoofed}`).toBe(429);
         }
         // The data endpoint has its own limit: an existing token keeps working.
         const api = await newApi(playwright);

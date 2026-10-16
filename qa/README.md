@@ -62,8 +62,8 @@ Check it's up: `curl http://localhost:8000/health` returns `{"ok":true}`.
    To force a new token, clear `accessToken` in the collection's **Variables** tab.
 4. Each request's checks are under **Scripts → Post-response**; saved example responses are under
    **Examples** in the sidebar (click the arrow next to the request).
-5. To run everything: click the collection → **Run**. Expect 58 requests, 278 checks passed (Local,
-   auth on). The run makes 12 token requests; wait a minute between full runs (token rate limit).
+5. To run everything: click the collection → **Run**. Expect 65 requests, 308 checks passed (Local,
+   auth on). The run makes 13 token requests; wait a minute between full runs (token rate limit).
 
 API 1 needs a month: its requests send `month` and `year`, which default to the current month (India
 time), where the sample data is. To test another month, add `month` and `year` variables to the
@@ -98,11 +98,11 @@ Test data to use:
 - EB amounts are running totals (SLAB 2 includes SLAB 1); the API never adds rows together.
 
 - Start-up safety (stop your running API first; run from the repo folder with a `.env.local`
-  that has no `AUTH_CLIENTS`/`JWT_SECRET`, or move it aside): `uv run uvicorn app.main:app` must
+  that has no `AUTH_CLIENTS`/`JWT_SECRET`, or move it aside): `uv run python -m app` must
   refuse to start with `APP_ENV is not set and there are no auth settings`;
-  `APP_ENV=local uv run uvicorn app.main:app` starts and logs `Auth is OFF`;
-  `APP_ENV=prod AUTH_CLIENTS='{"x":"0b1f90b824765bd860b58a3ebc0396a4f6f4c4ad8f1eed10135c0cb6cf3bd171"}' JWT_SECRET=local-only-jwt-signing-key-not-for-servers-0001 uv run uvicorn app.main:app`
-  must refuse the example values.
+  `APP_ENV=local uv run python -m app` starts and logs `Auth is OFF`;
+  `APP_ENV=prod AUTH_CLIENTS='{"x":"0b1f90b824765bd860b58a3ebc0396a4f6f4c4ad8f1eed10135c0cb6cf3bd171"}' JWT_SECRET=local-only-jwt-signing-key-not-for-servers-0001 uv run python -m app`
+  must refuse the example values, and so must the same command without `APP_ENV=prod` (APP_ENV unset).
 
 - With the cache on (`CACHE_ENABLED=true`, Redis running): the first request for a dealer and month
   has `X-Cache: MISS`, a repeat has `X-Cache: HIT` with the same body; stop Redis and requests
@@ -113,12 +113,12 @@ Test data to use:
 ```bash
 cd qa/api-tests
 npm install                                                   # first time only
-AUTH_ENABLED=true npx playwright test                         # 96 cases (API 1 + common)
+AUTH_ENABLED=true npx playwright test                         # 100 cases (API 1 + common)
 npm run report                                                # opens the HTML report
 ```
 
 On localhost the suite uses `local-client` / `local-test-secret` unless `CLIENT_ID` /
-`CLIENT_SECRET` are set; each worker gets one token. Expected: 93 passed, 3 skipped
+`CLIENT_SECRET` are set; each worker gets one token. Expected: 97 passed, 3 skipped
 (COMMON_TC_4_SEC needs an HTTPS URL; API1_TC_69_SEC and COMMON_TC_19_SEC need `RATE_LIMIT` /
 `TOKEN_RATE_LIMIT`). A run makes about 25 token requests (one per worker plus the token-endpoint cases), so wait a minute before running it (or
 newman) again, or the token requests get `429`. Run one file with
@@ -286,7 +286,7 @@ npm run report                                                    # HTML report
 |---|---|---|
 | `API_BASE_URL` | `http://localhost:8000` | Server under test |
 | `CLIENT_ID`, `CLIENT_SECRET` | `local-client` / `local-test-secret` on localhost, else empty | Exchanged once per worker at `/v1/auth/token`; the token is sent as `Authorization: Bearer` (refetched when < 60 s are left). `CLIENT_ID=` sends no token |
-| `AUTH_ENABLED` | `false` | `true` when the server requires a token: runs the auth cases (API1_TC_43–47_SEC, API1_TC_70–77, COMMON_TC_5–19) and makes a failed token request an error |
+| `AUTH_ENABLED` | `false` | `true` when the server requires a token: runs the auth cases (API1_TC_43–47_SEC, API1_TC_70–77, COMMON_TC_5–20) and makes a failed token request an error |
 | `JWT_SECRET` | the `.env.example` key on localhost, else empty | The server's signing key, to forge expired / wrong-scope / wrong-claim tokens (API1_TC_74–76_SEC; skipped without it) |
 | `JWT_TTL_SECONDS` | `3600` | The server's token lifetime, checked as `expires_in` |
 | `TOKEN_RATE_LIMIT` | — | The server's `TOKEN_RATE_LIMIT_PER_MINUTE`; set it to run COMMON_TC_19_SEC, on its own (`-g COMMON_TC_19`): it uses up the token limit for a minute |
@@ -371,8 +371,10 @@ data is; override with `MONTH` / `YEAR`).
 | API1_TC_25 | Negative | Month 9.5, `"Sept"`, `""`, `[9]`, `null` | 422 |
 | API1_TC_26–65 | Edge, negative, security | Request contract (with month and year in every body) | See the table below |
 | API1_TC_66 | Functional | Month as one or two digits: `9`, `09` (unquoted), `"9"`, `"09"` | Same result as `9` |
-| API1_TC_67 | Negative | Month `-9`, `-09`, `"+9"`, `9.0`, `"9.0"`, `09.5`, `1e1`, `0`, `00`, `009`, `"009"`, `"010"`, `" 9 "` | 422 |
+| API1_TC_67 | Negative | Month `-9`, `-09`, `"+9"`, `9.0`, `"9.0"`, `09.5`, `1e1`, `0`, `00`, `009`, `"009"`, `"010"`, `" 9 "`, `010`, `0010`, `"0010"`, `0012`, `"012"`, `13` | 422 |
 | API1_TC_68 | Negative | Year `02026`, `"02026"`, `26`, `"26"`, `-2026`, `"+2026"`, `2026.0`, `"2026.0"`, `2.026e3`, `" 2026 "` | 422 |
+| API1_TC_78 | Validation | Every month 1–12 as `1`–`9`, `01`–`09`, `10`, `11`, `12`, numbers or strings (QA 2026-10-16) | 200, an array |
+| API1_TC_79 | Edge | `"month": 09` with `Content-Type: Application/JSON` or `APPLICATION/JSON; charset=utf-8` (QA 2026-10-16 #8) | 200, same rows as `application/json` |
 | API1_TC_69_SEC | Rate Limiting | 3 × the per-IP limit at once (runs when `RATE_LIMIT` is set, against a server with a low `RATE_LIMIT_PER_SECOND`, e.g. 20) | Some 429 with `Retry-After: 1`, security headers, no 5xx; 200 again a second later |
 | API1_TC_70_SEC | Authentication | Non-ASCII Bearer token (`kéy`, a real token + `é`, `ÿÿÿ…`) | 401 `{"detail": "Invalid token"}` with security headers, never 500 |
 | API1_TC_71_SEC | Authentication | Other schemes: `Basic <client_id:secret>`, `Token <jwt>`, `JWT <jwt>`, a bare token | 401 `Not authenticated` |
@@ -439,6 +441,7 @@ All 422 responses are also checked for leaks: no traceback, file paths, SQL/DB e
 | COMMON_TC_2 | Negative | Unknown route | 404 |
 | COMMON_TC_3_SEC | Authentication | `/health` without a token | 200 (liveness probe stays open) |
 | COMMON_TC_4_SEC | Transport | Plain HTTP on deployed URL | redirect or refused (skipped on local http) |
+| COMMON_TC_21_SEC | Supply Chain | `/docs` (skipped when docs are off): Swagger UI script and stylesheet from one exact `swagger-ui-dist` version with `integrity` + `crossorigin`; CSP allows only that release; the hashes match the files on the CDN (QA 2026-10-16 #14) | All true |
 
 Token endpoint `POST /v1/auth/token` (RFC 6749 client credentials; run with `AUTH_ENABLED=true`).
 Every error is checked for `{error, error_description}` only, `Cache-Control: no-store`, and no
@@ -460,7 +463,8 @@ traceback or secret in the body.
 | COMMON_TC_16_SEC | Negative | `text/plain` body, broken JSON, a JSON array, a non-string value | 400 `invalid_request` |
 | COMMON_TC_17_SEC | Parameter Pollution | `client_id` sent twice | 400 `invalid_request` |
 | COMMON_TC_18_SEC | Authentication | No `client_secret`, an empty one, malformed Basic | 401 `invalid_client` |
-| COMMON_TC_19_SEC | Rate Limiting | `TOKEN_RATE_LIMIT` + 5 token requests at once (runs when `TOKEN_RATE_LIMIT` is set; run alone) | Some 429 with `Retry-After` ≤ 60 s, no 5xx; API 1 still works with the existing token |
+| COMMON_TC_19_SEC | Rate Limiting | `TOKEN_RATE_LIMIT` + 5 token requests at once (runs when `TOKEN_RATE_LIMIT` is set; run alone); then two more with a made-up `X-Forwarded-For` (QA 2026-10-16 #1) | Some 429 with `Retry-After` ≤ 60 s, no 5xx; the spoofed requests are still 429; API 1 still works with the existing token |
+| COMMON_TC_20_SEC | Parameter Pollution | JSON body with `client_secret` (or `client_id`) sent twice, the last one right (QA 2026-10-16 #9) | 400 `invalid_request` |
 
 ## OWASP API Security Top 10 (2023) coverage
 

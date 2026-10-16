@@ -115,20 +115,25 @@ def parse_last_updated(date_value: Any, time_value: Any) -> datetime:
 
 
 def parse_number(value: Any) -> Decimal | None:
-    """Parse SAP numbers: "12345.67 ", "1,234.50", and negatives written as "1234.56-"."""
+    """Parse SAP numbers: "12345.67 ", "1,234.50", and negatives written as "1234.56-".
+    NaN and Infinity are not amounts: they make the row bad rather than being stored."""
     if _is_blank(value) or isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
-    text = str(value).strip().replace(",", "").replace("%", "").strip()
-    if text.upper() in {"-", "NA", "N/A"}:
-        return None
-    if text.endswith("-"):
-        text = "-" + text[:-1]
-    try:
-        return Decimal(text)
-    except InvalidOperation:
-        raise ValueError(f"not a number: {value!r}") from None
+        number = Decimal(str(value))
+    else:
+        text = str(value).strip().replace(",", "").replace("%", "").strip()
+        if text.upper() in {"-", "NA", "N/A"}:
+            return None
+        if text.endswith("-"):
+            text = "-" + text[:-1]
+        try:
+            number = Decimal(text)
+        except InvalidOperation:
+            raise ValueError(f"not a number: {value!r}") from None
+    if not number.is_finite():
+        raise ValueError(f"not a number: {value!r}")
+    return number
 
 
 def to_jsonable(row: dict[str, Any]) -> dict[str, Any]:

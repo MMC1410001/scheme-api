@@ -222,10 +222,34 @@ test.describe('API 1 - Monthly schemes', () => {
     });
 
     test('API1_TC_67 Month with a sign, decimal, exponent, spaces, 0 or 3 digits returns 422 @negative', async () => {
-      for (const month of ['-9', '-09', '"-9"', '"+9"', '9.0', '"9.0"', '09.5', '1e1', '0', '00', '"0"', '009', '"009"', '"010"', '" 9 "']) {
+      for (const month of ['-9', '-09', '"-9"', '"+9"', '9.0', '"9.0"', '09.5', '1e1', '0', '00', '"0"', '009', '"009"', '"010"', '" 9 "',
+        '010', '0010', '"0010"', '0012', '"012"', '13', '"13"']) {
         const response = await raw(month, MONTH.year);
         expect(response.status(), `month ${month}`).toBe(422);
         await expectValidationError(response);
+      }
+    });
+
+    test('API1_TC_78 Every month 1-12 is accepted as 1-9, 01-09, 10, 11, 12 (number or string) @validation', async () => {
+      for (let m = 1; m <= 12; m++) {
+        const forms = m < 10 ? [`${m}`, `0${m}`, `"${m}"`, `"0${m}"`] : [`${m}`, `"${m}"`];
+        for (const month of forms) {
+          const response = await raw(month, MONTH.year);
+          expect(response.status(), `month ${month}`).toBe(200);
+          expect(Array.isArray(await response.json()), `month ${month}`).toBe(true);
+        }
+      }
+    });
+
+    test('API1_TC_79 Zero-padded month works whatever the Content-Type case (Application/JSON) @edge', async () => {
+      const expected = await rowsFor(DEALER);
+      for (const contentType of ['Application/JSON', 'APPLICATION/JSON; charset=utf-8']) {
+        const response = await client().post(API1, {
+          headers: { 'Content-Type': contentType },
+          data: Buffer.from(`{"dealer_code": ${JSON.stringify(DEALER)}, "month": ${padded}, "year": ${MONTH.year}}`),
+        });
+        expect(response.status(), contentType).toBe(200);
+        expect(await response.json(), contentType).toEqual(expected);
       }
     });
 

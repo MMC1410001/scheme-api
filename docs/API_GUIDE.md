@@ -75,7 +75,7 @@ call returns `401` with `"detail": "Token expired"`, get a new token and retry t
 
 | Endpoint | Status | Body | What to do |
 |---|---|---|---|
-| `/v1/auth/token` | `400` | `{"error": "invalid_request", "error_description": "..."}` (missing `grant_type`, unreadable body, credentials in both Basic and body, repeated parameter) | Fix the request |
+| `/v1/auth/token` | `400` | `{"error": "invalid_request", "error_description": "..."}` (missing `grant_type`, unreadable body, credentials in both Basic and body, repeated (form field or JSON key) parameter) | Fix the request |
 | `/v1/auth/token` | `400` | `{"error": "unsupported_grant_type", ...}` | Send `grant_type=client_credentials` |
 | `/v1/auth/token` | `400` | `{"error": "invalid_scope", ...}` | Omit `scope` or send `schemes:read` |
 | `/v1/auth/token` | `401` | `{"error": "invalid_client", "error_description": "Client authentication failed"}` | Check `client_id` and `client_secret` (a wrong id and a wrong secret look the same) |
@@ -99,7 +99,7 @@ API 1 takes the dealer code and the month:
 | Field | Type | Rules |
 |---|---|---|
 | `dealer_code` | string or number | Required. SAP customer code, letters and digits only, 1–20 characters. Leading zeros and surrounding spaces are ignored, so `"0006100000001"`, `" 6100000001 "` and `6100000001` are the same dealer. |
-| `month` | integer (or numeric string) | Required. 1–12. One or two digits: `9`, `09`, `"9"`, `"09"`, `10` are accepted; `-9`, `9.5`, `0`, `009`, `true` or `"Oct"` are rejected. |
+| `month` | integer (or numeric string) | Required. 1–12. One or two digits: `9`, `09`, `"9"`, `"09"`, `10` are accepted; `-9`, `9.5`, `0`, `009`, `010`, `0010`, `true` or `"Oct"` are rejected. |
 | `year` | integer (or numeric string) | Required. Four digits, 2000–2100: `2026` or `"2026"`; `02026`, `"26"`, `-2026`, `2026.0` or `" 2026 "` are rejected. |
 
 Send `Content-Type: application/json`. Bodies larger than 4 KB are rejected.

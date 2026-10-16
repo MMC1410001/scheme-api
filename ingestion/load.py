@@ -55,11 +55,13 @@ def is_loaded(conn: Connection, kind: str, file: SourceFile) -> bool:
 
 
 def save_scheme_file(
-    conn: Connection, file: SourceFile, year: int, month: int, records: list[dict[str, Any]], rows_bad: int = 0
+    conn: Connection, file: SourceFile, year: int, month: int, records: list[dict[str, Any]], rows_bad: int = 0,
+    failed: bool = False,
 ) -> None:
-    """Save a file's rows and record it as loaded, or as failed if rows_bad rows could not be read."""
+    """Save a file's rows and record it as loaded, or as failed if rows_bad rows could not be read
+    or the whole file could not be read (failed, with no records)."""
     with conn.transaction():
-        _replace_file(conn, "scheme", file, year, month, len(records), rows_bad)
+        _replace_file(conn, "scheme", file, year, month, len(records), rows_bad, failed or rows_bad > 0)
         conn.execute(_DROP_STAGE)
         conn.execute(_CREATE_STAGE)
         with conn.cursor() as cur:
@@ -70,7 +72,8 @@ def save_scheme_file(
 
 
 def _replace_file(
-    conn: Connection, kind: str, file: SourceFile, year: int, month: int, row_count: int, rows_bad: int = 0
+    conn: Connection, kind: str, file: SourceFile, year: int, month: int, row_count: int, rows_bad: int = 0,
+    failed: bool = False,
 ) -> int:
     # Re-recording a file replaces its entry; its scheme rows are upserted, not deleted.
     conn.execute("DELETE FROM ingested_files WHERE kind = %s AND gcs_path = %s", (kind, file.path))
@@ -82,5 +85,5 @@ def _replace_file(
         RETURNING id
         """,
         (kind, file.path, file.generation, file.updated_at, year, month, row_count,
-         "failed" if rows_bad else "loaded", rows_bad),
+         "failed" if failed else "loaded", rows_bad),
     ).fetchone()["id"]

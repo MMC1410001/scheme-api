@@ -1,8 +1,9 @@
 -- One row per file loaded from GCS. Re-uploading a file (new GCS generation)
 -- replaces its rows; the cron job skips files it has already loaded.
 -- status 'failed': some rows could not be read even after reading the file again; its good rows
--- are loaded and rows_bad says how many were left out. It is not retried until SAP re-uploads it
--- (or the month is loaded with --reload).
+-- are loaded and rows_bad says how many were left out. With rows_bad = 0 and row_count = 0, the
+-- whole file could not be read (not UTF-8, missing columns, not a workbook). Either way it is not
+-- retried until SAP re-uploads it (or the month is loaded with --reload).
 CREATE TABLE IF NOT EXISTS ingested_files (
     id                BIGSERIAL PRIMARY KEY,
     kind              TEXT NOT NULL CHECK (kind = 'scheme'),

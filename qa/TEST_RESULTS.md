@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Date | 2026-10-15 (functional, Redis rate tests); 2026-10-14 (earlier k6 runs, security scans) |
+| Date | 2026-10-16 (QA audit + regression run); 2026-10-15 (functional, Redis rate tests); 2026-10-14 (earlier k6 runs, security scans) |
 | Build | `scheme-api` 0.1.0 (local, uncommitted changes of this date) |
 | Environment | Local: Apple M2, 8 cores, 16 GB · Postgres 16 and Redis 7 in Docker · API with 4 uvicorn workers, `--no-server-header`, `API_KEY` set |
 | Data | Sample SAP exports + 20,000 made-up dealers (160,017 scheme rows) |
@@ -11,6 +11,52 @@
 > API's behaviour and relative limits, not production capacity. Re-run k6 on the deployed environment.
 
 ## Summary
+
+### QA audit and regression run — 2026-10-16 (local)
+
+Independent exploratory testing against the Swagger spec, a code review of `app/` and `ingestion/`,
+then fixes with regression tests. Local only: Postgres 16 + Redis 7 in Docker, sample data for
+October 2026, API started with `APP_ENV=local python -m app` (auth on, `local-client`).
+
+| Suite | Total | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| pytest (unit + database tests, `TEST_DATABASE_URL` set) | 349 | 349 | 0 | 0 |
+| Postman — API 1 collection (65 requests) — assertions (newman) | 308 | 308 | 0 | 0 |
+| Playwright — API 1 + common | 100 | 97 | 0 | 3 |
+| Playwright — COMMON_TC_19_SEC on its own (`TOKEN_RATE_LIMIT=30`) | 1 | 1 | 0 | 0 |
+| Swagger UI in Chrome: Authorize (client credentials) → Try it out → 200, 8 rows; pinned assets load with SRI, no console errors | 1 | 1 | 0 | 0 |
+
+Before the fixes the same suites passed (pytest 283, Playwright 93 + 3 skipped, newman 278 checks);
+the defects below were found by exploratory tests and code review, not by the existing suites.
+Playwright skips: COMMON_TC_4_SEC (needs HTTPS), API1_TC_69_SEC (needs a low `RATE_LIMIT_PER_SECOND`),
+COMMON_TC_19_SEC (run on its own, above). New regression cases: pytest (66 tests), API1_TC_78–79,
+COMMON_TC_20–21_SEC, more months in API1_TC_67, a spoofing check in COMMON_TC_19_SEC, and 3 new
+Postman requests.
+
+| # | Sev | Finding (2026-10-16) | Status | Regression tests |
+|---|---|---|---|---|
+| QA-1 | Medium | A made-up `X-Forwarded-For` got a fresh token rate limit (429 → 200): uvicorn trusts `X-Forwarded-For` from 127.0.0.1 by default and rewrote the client IP before the app saw it. Behind a proxy that uvicorn doesn't trust, the opposite happens: every caller shares one count. | **Fixed:** `TRUSTED_PROXIES` setting; the app picks the right-most untrusted `X-Forwarded-For` entry itself (`app/ratelimit.py` `client_ip`); `python -m app` starts uvicorn with its proxy handling off. Re-test: spoofed header → 429. **DevOps:** start with `python -m app`, set `TRUSTED_PROXIES`. | `test_ratelimit.py` (client_ip cases, spoofing, launcher), `test_config.py`, COMMON_TC_19_SEC |
+| QA-2 | Medium | If both `…/2026/01/` and `…/2026/1/` exist, the loader read only the first and skipped the other without a log line. | **Fixed:** every candidate folder is read (de-duplicated by path). | `test_run.py::test_both_month_folders_are_loaded_when_both_exist` |
+| QA-3 | — | A corrected validity period leaves the old period's row, so API 1 returns both. | **By design** (business rule: every stored period overlapping the month is returned). No change. | — |
+| QA-4 | Medium | `NaN` / `Infinity` amounts were stored and served as `null` with no warning. | **Fixed:** they make the row bad (counted, logged, file marked failed). | `test_schemes.py` (10 values + a row) |
+| QA-5 | Medium | A file that can't be read at all (not UTF-8, missing columns) was never recorded: every cron run downloaded it again, failed again and exited 1. | **Fixed:** read once more, then recorded as `failed` with no rows (not retried until re-upload or `--reload`). A download error is still retried next run. | `test_run.py` (5 unreadable kinds, re-read + record, download error), `test_load_db.py` |
+| QA-6 | Medium | Dates written `DD MM YYYY` (spaces) are rejected. | **Skipped** (decision 2026-10-16). | — |
+| QA-7 | Medium | With `APP_ENV` unset, the API started on the published `.env.example` client and key. | **Fixed:** those values need `APP_ENV=local` set explicitly; the error says so. Local start command is now `APP_ENV=local uv run python -m app`. | `test_config.py::test_example_credentials_need_app_env_local_set_explicitly` |
+| QA-8 | Low | `"month": 09` got 422 when `Content-Type` was not lower-case (`Application/JSON`). | **Fixed:** media type compared case-insensitively. | `test_api.py`, API1_TC_79, Postman |
+| QA-9 | Low | `/v1/auth/token` JSON body with a repeated key kept the last value (a second `client_secret` won); a repeated form key was already refused. | **Fixed:** 400 `invalid_request`. | `test_auth.py`, COMMON_TC_20_SEC, Postman |
+| QA-10 | Low | A non-numeric cache data version in Redis made every cached request 500. | **Fixed:** treated like Redis being unusable: answered from the database (`X-Cache: BYPASS`). | `test_cache.py` |
+| QA-11 | Info | The spec types `month`/`year` as integers, but `"10"` is also accepted. | **No change** (strings are wanted). | existing API1_TC_66 |
+| QA-12 | Low | A header-only file with the wrong columns was recorded as loaded with 0 rows. | **Fixed:** columns are checked even with no data rows (→ QA-5 handling). | `test_run.py` |
+| QA-13 | Info | Loader memory: ~360 MB per 50,000-row file, up to ~1.8 GB with 4 workers (real files ~5,500 rows, ~40 MB). | **Documented** in the README (lower `LOADER_WORKERS` if files grow). | — |
+| QA-14a | Info | The `TIMEZONE` comment said the API uses it; it decides the loader's default month (the API takes the month from the request). | **Fixed:** comment and README corrected; setting kept. | `test_run.py::test_the_default_month_is_the_current_month_in_india_time` |
+| QA-14b | Low | Swagger UI loaded `swagger-ui-dist@5` (any 5.x) from the CDN with no integrity check. | **Fixed:** pinned to 5.32.15 with SHA-384 SRI (verified against the npm package); CSP allows only that release path. | `test_docs.py`, COMMON_TC_21_SEC, Postman |
+| QA-14c | — | A row with no end date counts as a single day; month input must be `1`–`9`, `01`–`09`, `10`–`12` only (`0010` refused). | **Confirmed correct**, no change; month forms locked by tests. | `test_api.py`, API1_TC_67, API1_TC_78 |
+
+Deploy notes for this change: start the API with `python -m app` (or uvicorn `--no-proxy-headers`)
+and set `TRUSTED_PROXIES` to the nginx / load balancer address(es), with nginx sending
+`X-Forwarded-For $proxy_add_x_forwarded_for`. No database migration (the `failed` status already exists).
+
+### Earlier run — 2026-10-15
 
 Latest run, 2026-10-15 (Redis response cache added):
 
@@ -232,3 +278,4 @@ Observations:
 | 4 | Decide whether `/docs` is public in production (`DOCS_ENABLED=false` to hide). | Team decision |
 | 5 | Re-run Playwright with `SAMPLE_DATA=false` and real dealer codes once GCS data is connected. | QA |
 | 6 | Reload every month already loaded on dev/UAT (`ingestion.run schemes --year Y --month M --reload`) so rows written over before the validity period joined the row key come back. | DevOps / QA after deploy |
+| 7 | Deploy the 2026-10-16 fixes: start the API with `python -m app` (or `--no-proxy-headers`), set `TRUSTED_PROXIES`, check that nginx appends `X-Forwarded-For`; then run COMMON_TC_19_SEC and COMMON_TC_21_SEC on dev. | DevOps / QA after deploy |

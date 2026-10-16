@@ -453,6 +453,51 @@
           ]
         },
         {
+          "name": "Monthly schemes - Content-Type in another case (Application/JSON) with month 09",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "Application/JSON"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "Media types are case-insensitive: a zero-padded month must work with Application/JSON too (QA 2026-10-16 #8).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{monthPadded}},\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Same row count as the first request\", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get(\"api1RowCount\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Monthly schemes - month with no data returns []",
           "request": {
             "method": "POST",
@@ -1144,6 +1189,182 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \" 9 \",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 010 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 010,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month 0010 -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": 0010,\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \"0010\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"0010\",\n  \"year\": {{year}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Month \"012\" -> 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/schemes/current-month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "schemes",
+                "current-month"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": \"012\",\n  \"year\": {{year}}\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2239,6 +2460,43 @@
           ]
         },
         {
+          "name": "Swagger UI loads a pinned release with integrity hashes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/docs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "docs"
+              ]
+            },
+            "description": "QA 2026-10-16 #14: the docs page used swagger-ui-dist@5 (any 5.x) with no integrity check.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 404) { pm.test(\"SKIPPED: docs are off on this server (DOCS_ENABLED=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const html = pm.response.text();",
+                  "pm.test(\"Not the floating @5 release\", () => pm.expect(html).to.not.include(\"swagger-ui-dist@5/\"));",
+                  "pm.test(\"Script pinned with SRI\", () => pm.expect(html).to.match(/<script src=\"https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/swagger-ui-bundle\\.js\" integrity=\"sha384-[^\"]+\" crossorigin=\"anonymous\">/));",
+                  "pm.test(\"Stylesheet pinned with SRI\", () => pm.expect(html).to.match(/href=\"https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/swagger-ui\\.css\" integrity=\"sha384-[^\"]+\" crossorigin=\"anonymous\">/));",
+                  "pm.test(\"CSP allows only that release\", () => pm.expect(pm.response.headers.get(\"Content-Security-Policy\")).to.match(/script-src [^;]*https:\\/\\/cdn\\.jsdelivr\\.net\\/npm\\/swagger-ui-dist@\\d+\\.\\d+\\.\\d+\\/;/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Oversized body -> 413",
           "request": {
             "method": "POST",
@@ -2924,6 +3182,60 @@
                   "type": "text"
                 }
               ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "if (pm.collectionVariables.get(\"authEnabled\") !== \"true\" && pm.environment.get(\"authEnabled\") !== \"true\") { pm.test(\"SKIPPED: auth is not enabled on this server (authEnabled=false)\", () => {}); return; }",
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Cache-Control: no-store\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\"));",
+                  "pm.test(\"Pragma: no-cache\", () => pm.expect(pm.response.headers.get(\"Pragma\")).to.eql(\"no-cache\"));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Body is {error, error_description}\", () => pm.expect(Object.keys(pm.response.json())).to.have.members([\"error\", \"error_description\"]));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token - JSON parameter sent twice -> 400 invalid_request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "A repeated JSON key used to keep the last value, so a second secret won (QA 2026-10-16 #9).",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{clientId}}\",\n  \"client_secret\": \"wrong-secret-qa\",\n  \"client_secret\": \"{{clientSecret}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           },
           "event": [

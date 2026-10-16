@@ -121,6 +121,20 @@ def test_bad_number_is_an_error():
         parse_number("12a")
 
 
+@pytest.mark.parametrize("value", [
+    "NaN", "nan", "sNaN", "Infinity", "-Infinity", "inf", "Inf-", float("nan"), float("inf"), Decimal("NaN"),
+])
+def test_nan_and_infinity_are_not_amounts(value):
+    """QA 2026-10-16 #4: "NaN" was stored and the API served it as null with no warning."""
+    with pytest.raises(ValueError, match="not a number"):
+        parse_number(value)
+
+
+def test_a_row_with_nan_is_a_bad_row():
+    with pytest.raises(ValueError, match="not a number"):
+        to_record(sap_row(**{"GSR (B)": "NaN"}), 2026, 8, "f.csv")
+
+
 def test_dates_are_day_first_and_zero_dates_are_empty():
     assert parse_date("05/08/2026") == date(2026, 8, 5)
     assert parse_date("00/00/0000") is None

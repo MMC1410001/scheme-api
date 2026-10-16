@@ -50,7 +50,7 @@ class ResponseCache:
         try:
             full_key = f"{KEY_PREFIX}:{self._data_version()}:{key}"
             cached = self.client.get(full_key)
-        except redis.RedisError as exc:
+        except (redis.RedisError, ValueError) as exc:  # ValueError: the data version is not a number
             self._failed(exc)
             return build(), BYPASS
         if cached is not None:
@@ -72,7 +72,7 @@ class ResponseCache:
 
     def _failed(self, exc: Exception) -> None:
         self._down_until = time.monotonic() + RETRY_AFTER_SECONDS
-        log.warning("Redis unavailable (%s); answering from the database for %ds", exc, RETRY_AFTER_SECONDS)
+        log.warning("Redis unavailable or unusable (%s); answering from the database for %ds", exc, RETRY_AFTER_SECONDS)
 
     def close(self) -> None:
         if self.client is not None:
