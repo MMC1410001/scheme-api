@@ -256,7 +256,7 @@
                 },
                 "examples": {
                   "rows": {
-                    "summary": "Dealer with data (3 of the 8 components shown)",
+                    "summary": "Dealer with data (3 of the 10 components shown)",
                     "value": [
                       {
                         "Customer": "6100000001",

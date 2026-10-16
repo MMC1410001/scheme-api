@@ -158,7 +158,7 @@ def load_schemes(
 def parse_scheme_file(
     content: bytes, path: str, year: int, month: int, header_rows: int, log_rows: bool = True,
 ) -> tuple[list[dict], Counter]:
-    """One SAP file's rows for the 8 template components, plus counts of rows left out.
+    """One SAP file's rows for the 10 template components, plus counts of rows left out.
     With log_rows, each skipped row is logged with the reason. Raises UnreadableFile if the file
     can't be parsed at all or lacks the expected columns (checked even when it has no data rows)."""
     counts: Counter = Counter()

@@ -67,7 +67,7 @@ def schemas():
 def record(rng, n, dealer, deal_suffix, minute):
     return {
         "year": 2026, "month": 9, "dealer_code": dealer, "agreement": "200002155", "deal_suffix": deal_suffix,
-        "component": rng.choice(["EB SLAB 1", "VALUE", "LUXURY", "EB FULL MONTH"]),
+        "component": rng.choice(["EB SLAB 1", "VALUE", "VALUE %", "VALUE FA", "LUXURY", "EB FULL MONTH"]),
         # few periods, some without dates, so the same agreement and suffix appears with several periods
         "valid_from": rng.choice([date(2026, 8, 1), date(2026, 9, 1), None]),
         "valid_to": rng.choice([date(2026, 8, 31), date(2026, 9, 30), None]),
@@ -323,7 +323,7 @@ def test_upgrade_from_the_key_without_dates(schemas):
     conn.execute(f'CREATE SCHEMA "{schema}"')
     conn.execute(OLD_SCHEMA)
     rng = random.Random(0)
-    old_row = period(rng, 1, date(2026, 8, 1), date(2026, 8, 31))
+    old_row = {**period(rng, 1, date(2026, 8, 1), date(2026, 8, 31)), "component": "VALUE"}  # the old CHECK's list
     conn.execute(f"INSERT INTO scheme_records ({', '.join(SCHEME_FIELDS)}) VALUES ({', '.join(['%s'] * len(SCHEME_FIELDS))})",
                  [Jsonb(old_row[f]) if f == "raw" else old_row[f] for f in SCHEME_FIELDS])
     conn.execute("INSERT INTO ingested_files (kind, gcs_path, generation, source_updated_at) VALUES ('scheme', 'old.csv', '1', now())")
@@ -337,6 +337,12 @@ def test_upgrade_from_the_key_without_dates(schemas):
     assert conn.execute("SELECT status, rows_bad FROM ingested_files").fetchone() == {"status": "loaded", "rows_bad": 0}
     save_scheme_file(conn, source(1), 2026, 9, [period(rng, 2, date(2026, 9, 1), date(2026, 9, 30))])  # same old key
     assert [r["gsr_b"] for r in stored(conn)] == [1, 2]
+    # The old component CHECK is replaced, so the components added later load too.
+    added = [{**period(rng, n, date(2026, 9, 1), date(2026, 9, 30)), "deal_suffix": f"1{n}", "component": c}
+             for n, c in ((3, "VALUE %"), (4, "VALUE FA"))]
+    save_scheme_file(conn, source(2), 2026, 9, added)
+    assert [r["component"] for r in conn.execute(
+        "SELECT component FROM scheme_records WHERE deal_suffix IN ('13', '14') ORDER BY component")] == ["VALUE %", "VALUE FA"]
 
 
 def test_running_the_schema_again_adds_no_constraints(schemas):

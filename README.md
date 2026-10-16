@@ -14,7 +14,7 @@ Postgres ──► FastAPI ──► the client
 
 | API | Endpoint | Body | Returns |
 |---|---|---|---|
-| 1 | `POST /v1/schemes/current-month` | `{"dealer_code": "6100000001", "month": 10, "year": 2026}` | The dealer's rows for the 8 template components in that month, in template order |
+| 1 | `POST /v1/schemes/current-month` | `{"dealer_code": "6100000001", "month": 10, "year": 2026}` | The dealer's rows for the 10 template components in that month, in template order |
 
 API 1 returns a JSON list (empty when there's no data). Every call needs `Authorization: Bearer <token>`,
 with a 1-hour token from `POST /v1/auth/token` (OAuth2 client credentials; see *Authentication*).
@@ -124,7 +124,7 @@ Open **http://localhost:8000/docs** in your browser:
 2. Open **POST /v1/schemes/current-month** → **Try it out**.
 3. Use the body `{"dealer_code": "6100000001", "month": 10, "year": 2026}` (use the current month
    and year: the sample data is written for the current month) → **Execute**.
-4. You should get `200` and 8 rows (EB SLAB 1, 2, 3, VALUE, LUXURY, PREMIUM 01, 02, EB FULL MONTH).
+4. You should get `200` and 10 rows (EB SLAB 1, 2, 3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01, 02, EB FULL MONTH).
 
 Or from a second terminal:
 
@@ -190,15 +190,15 @@ Next time, `docker start acme-db` and continue from Step 4
 Input: SAP exports `sap-exports_YYYY_MM_main_YYYYMMDD_HHMMSS_NNN.csv` (one header row,
 up to 50,000 rows per file, several files a day).
 
-- Only 8 components (SAP "Comp desc") are kept, matched exactly: EB SLAB 1, EB SLAB 2,
-  EB SLAB 3, VALUE, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. Look-alikes such as
-  `ALWD EB2` or `ADDTNL PREMIUM 01` are dropped. The list is in `app/constants.py`.
+- Only 10 components (SAP "Comp desc") are kept, matched exactly: EB SLAB 1, EB SLAB 2,
+  EB SLAB 3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. Look-alikes
+  such as `ALWD EB2`, `ALWD VALUE SCH` or `ADDTNL PREMIUM 01` are dropped. The list is in `app/constants.py`.
 - Each daily file contains only the rows SAP updated that day. A row is identified by
   Customer + Agreement + Deal Suffix + validity period (Valid from, To) within a month folder, and
   the version with the newest "Last Updated Date/Time" wins, whatever order files are loaded in.
   The period is part of the key because one month's folder can hold the same agreement and suffix
   for two periods (late SAP updates of last month's scheme next to this month's); both are kept.
-- Qualification = `GSR (Q)` for EB SLAB 1–3 and Value, `Invoiced Quantity(Q)` for Luxury and Premium.
+- Qualification = `GSR (Q)` for EB SLAB 1–3 and Value (VALUE, VALUE %, VALUE FA), `Invoiced Quantity(Q)` for Luxury and Premium.
   EB FULL MONTH follows the EB slab working: SAP leaves its `GSR (Q)` empty (on slab rows `GSR (Q)`
   always equals `GSR (B)`), so its Qualification is `GSR (B)`.
 - After a rule change, recalculate a month that is already loaded with

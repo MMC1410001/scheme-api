@@ -28,7 +28,7 @@ def _row(component, to_date, qualification, gsr_b, rate, clear_cut=0.0, shortfal
 
 API1_ROWS = {
     "rows": {
-        "summary": "Dealer with data (3 of the 8 components shown)",
+        "summary": "Dealer with data (3 of the 10 components shown)",
         "value": [
             _row("EB SLAB 1", "2026-10-11", 405232.86, 405232.86, 0.75, next_rate=1.0),
             _row("LUXURY", "2026-10-31", 315.1, 159292.8, 1.0, 1592.93, 84.9, 21.23, 1.5),

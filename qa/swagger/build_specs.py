@@ -34,8 +34,8 @@ HOW_TO = (
 SPECS = {
     "Scheme_API1_Current_Month.openapi.json": (
         "/v1/schemes/current-month", "Scheme API 1 - Monthly schemes",
-        "POST {dealer_code, month, year} returns the dealer's rows for the 8 template components "
-        "(EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02, EB FULL MONTH) in that month.",
+        "POST {dealer_code, month, year} returns the dealer's rows for the 10 template components "
+        "(EB SLAB 1-3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02, EB FULL MONTH) in that month.",
     ),
 }
 

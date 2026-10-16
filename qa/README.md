@@ -73,7 +73,7 @@ Test data to use:
 
 | Dealer | API 1 shows |
 |---|---|
-| `6100000001` | All 8 components in the current month; LUXURY was updated on day 2, so the newer values must appear (Qualification 315.1, GsrB 159292.8) |
+| `6100000001` | All 10 components in the current month; LUXURY was updated on day 2, so the newer values must appear (Qualification 315.1, GsrB 159292.8) |
 | `6100000002` | Negative values (SAP `882.00-` must come back as `-882`) |
 | `6200000001`–`6200020000` | Load-test dealers (only if you created them in Step 1) |
 | `6199999999` | No data: `200` with `[]` |
@@ -346,7 +346,7 @@ data is; override with `MONTH` / `YEAR`).
 |---|---|---|---|
 | API1_TC_1 | Functional | Dealer with data in the month | 200, non-empty array |
 | API1_TC_2 | Functional | Row fields | Exactly the 11 fields: the 10 template fields + `NextSlabRate` |
-| API1_TC_3 | Functional | Components | Only the 8 template components |
+| API1_TC_3 | Functional | Components | Only the 10 template components |
 | API1_TC_4 | Functional | Ordering | By ToDate, then template order |
 | API1_TC_5 | Functional | Customer value | Equals the requested dealer |
 | API1_TC_6 | Functional | Dealer code as JSON number | Same result as string |
@@ -359,7 +359,7 @@ data is; override with `MONTH` / `YEAR`).
 | API1_TC_13 | Validation | Amount types | Numbers or null, never strings |
 | API1_TC_14 | Validation | Component uniqueness | Each component once per dealer |
 | API1_TC_15 | Validation | Month | Every row's validity period overlaps the requested month |
-| API1_TC_16 | Validation | [sample] All 8 components | Present for 6100000001 |
+| API1_TC_16 | Validation | [sample] All 10 components | Present for 6100000001 |
 | API1_TC_17 | Validation | [sample] Latest update wins | Day-2 LUXURY values replace day 1 (not added) |
 | API1_TC_18 | Validation | [sample] SAP trailing-minus numbers | `-882` |
 | API1_TC_19 | Validation | [sample] Qualification basis | GSR for EB slabs and Value; EB FULL MONTH = its GSR (GsrB); invoiced qty for Luxury/Premium |

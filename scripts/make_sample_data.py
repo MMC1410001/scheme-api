@@ -44,6 +44,8 @@ for customer, gsr in (("6100000001", "405232.86 "), ("6100000002", "882.00-")): 
         row(customer, "04", "EB SLAB 2", slab_end[2], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1, "1.00"),
         row(customer, "05", "EB SLAB 3", slab_end[3], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1, "1.25"),
         row(customer, "09", "VALUE", last, gsr, "0.000", gsr, "0.00", "0.00", "0.00", "0.00", day1),
+        row(customer, "10", "VALUE %", last, gsr, "0.000", gsr, "0.50", "0.00", "0.00", "0.00", day1),
+        row(customer, "11", "VALUE FA", last, gsr, "0.000", gsr, "0.25", "0.00", "0.00", "0.00", day1),
         row(customer, "06", "LUXURY", last, "100.00", "200.000", "90000.00", "1.00", "900.00", "200.00", "50.00", day1, "1.25"),
         row(customer, "07", "PREMIUM 01", last, "0.00", "0.000", "0.00", "0.00", "0.00", "40.00", "100.00", day1),
         row(customer, "08", "PREMIUM 02", last, "0.00", "0.000", "0.00", "0.00", "0.00", "8.00", "100.00", day1),
@@ -65,7 +67,7 @@ def write_csv(rows, day):
 
 
 def write_perf_files(count: int) -> None:
-    """Dealers 6200000001.. with all 8 components, split into 50,000-row files like SAP does."""
+    """Dealers 6200000001.. with all 10 components, split into 50,000-row files like SAP does."""
     rows = []
     for n in range(1, count + 1):
         customer = f"62{n:08d}"
@@ -75,6 +77,8 @@ def write_perf_files(count: int) -> None:
             row(customer, "04", "EB SLAB 2", slab_end[2], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1),
             row(customer, "05", "EB SLAB 3", slab_end[3], gsr, "0.000", gsr, "0.75", "0.00", "0.00", "0.00", day1),
             row(customer, "09", "VALUE", last, gsr, "0.000", gsr, "0.00", "0.00", "0.00", "0.00", day1),
+            row(customer, "10", "VALUE %", last, gsr, "0.000", gsr, "0.50", "0.00", "0.00", "0.00", day1),
+            row(customer, "11", "VALUE FA", last, gsr, "0.000", gsr, "0.25", "0.00", "0.00", "0.00", day1),
             row(customer, "06", "LUXURY", last, "100.00", "200.000", "90000.00", "1.00", "900.00", "20.00", "9.09", day1),
             row(customer, "07", "PREMIUM 01", last, "0.00", "0.000", "0.00", "0.00", "0.00", "40.00", "100.00", day1),
             row(customer, "08", "PREMIUM 02", last, "0.00", "0.000", "0.00", "0.00", "0.00", "8.00", "100.00", day1),

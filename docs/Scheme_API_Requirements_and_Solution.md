@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Project | Scheme API (API 1: monthly schemes) |
-| Consumer | Client team |
-| Version | 0.8 (draft) — API 1 only; QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI (0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
+| Consumer | The client team |
+| Version | 0.9 (draft) — API 1 only; adds components VALUE % and VALUE FA (GSR (Q), after VALUE) (0.8: QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI; 0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
 | Date | 16 October 2026 |
 | Author | Project team |
 | Status | API 1 built and tested on sample and real SAP data. |
@@ -20,22 +20,21 @@
 5. Output: API response template
 6. Non-functional requirements
 7. Assumptions
-8. Open questions and dependencies
 
 **Part B — Solution**
 
-9. Solution overview and architecture
-10. Technology stack
-11. Data ingestion design
-12. Data model
-13. API specification
-14. Error handling
-15. Security design
-16. Configuration
-17. Project structure
-18. Deployment and operations
-19. Postman collection and Swagger spec
-20. Testing and quality results
+8. Solution overview and architecture
+9. Technology stack
+10. Data ingestion design
+11. Data model
+12. API specification
+13. Error handling
+14. Security design
+15. Configuration
+16. Project structure
+17. Deployment and operations
+18. Postman collection and Swagger spec
+19. Testing and quality results
 
 **Appendices**
 
@@ -82,7 +81,7 @@ returns it to the client's systems on request.
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-1 | API 1 takes a dealer code, a month and a year in the request body and returns that dealer's scheme rows for that month. | Must |
-| FR-2 | API 1 returns only these 8 components: EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. All other SAP components are excluded. | Must |
+| FR-2 | API 1 returns only these 10 components: EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. All other SAP components are excluded. | Must |
 | FR-3 | API 1 returns the columns of the agreed API template (section 5). | Must |
 | FR-4 | EB slabs are returned as separate rows (one row per slab). | Must |
 | FR-5 | Qualification is the GSR value for EB and Value, and the invoiced quantity for Premium and Luxury. EB FULL MONTH follows the same GSR working as the EB slabs. | Must |
@@ -103,7 +102,7 @@ returns it to the client's systems on request.
 | Format | CSV, one header row, 53 columns |
 | Size | Up to 50,000 rows per file; large exports are split into parts; about 550 files a month |
 | Content | Only the rows SAP updated on that day (not a full snapshot); one file contains many dealers |
-| Components | 66 different components ("Comp desc"); 8 are used |
+| Components | 66 different components ("Comp desc"); 10 are used |
 | Row identity | Customer + Agreement + Deal Suffix + validity period (Valid from, To) |
 | Dates | DD/MM/YYYY (DD.MM.YYYY and DD-MM-YYYY are also read); empty dates appear as 00/00/0000 |
 | Numbers | Trailing spaces; negative numbers have the minus sign at the end, e.g. `882.00-` |
@@ -114,9 +113,9 @@ SAP columns used by API 1:
 |---|---|
 | Customer | Dealer code |
 | Agreement, Deal Suffix | Row identity |
-| Comp desc | Component name (filter to the 8 components) |
+| Comp desc | Component name (filter to the 10 components) |
 | Valid from, To | Validity period |
-| GSR (Q) | Qualification for EB SLAB 1–3 and Value |
+| GSR (Q) | Qualification for EB SLAB 1–3 and Value (VALUE, VALUE %, VALUE FA) |
 | Invoiced Quantity(Q) | Qualification for Luxury and Premium |
 | GSR (B) | GSR B |
 | Rebate Rate | Rebate rate |
@@ -152,7 +151,7 @@ One row per component: the columns of the agreed API template, then `NextSlabRat
 | ID | Area | Requirement | Target |
 |---|---|---|---|
 | NFR-1 | Performance | Response time at expected load (150 concurrent users) | p95 < 500 ms, p99 < 1 s, errors < 1% |
-| NFR-8 | Performance | Peak load from the dealer app: planned 600 requests a minute, observed up to 1 lakh a minute | 1,700 requests/s with < 1% errors; Redis response cache (section 18.1) |
+| NFR-8 | Performance | Peak load from the dealer app: planned 600 requests a minute, observed up to 1 lakh a minute | 1,700 requests/s with < 1% errors; Redis response cache (section 17.1) |
 | NFR-2 | Availability | When overloaded, fail fast with a retryable response instead of hanging | 503 with Retry-After within 5 s |
 | NFR-3 | Freshness | New SAP exports appear in the API without manual steps | Within one cron cycle (suggested 30 minutes) |
 | NFR-4 | Security | Protected against OWASP API Top 10 risks; no data leakage in errors | No ZAP failures, no bandit findings, no known CVEs |
@@ -172,8 +171,8 @@ These assumptions were made while building the solution. Please confirm or corre
 | A-4 | The template is the final output, plus `NextSlabRate` (SAP "Next Slab Rate"), added after it as the last field of each row on 2026-10-15. Prepaid rate and customer name (from the first discussion) are not returned; "Rebate rate" is taken to be the rate that was meant. | Template confirmed; next slab rate requested 2026-10-15 |
 | A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. If SAP ever corrects a row's dates, the old period stays stored and is returned for the months it overlaps (decided 2026-10-15, re-confirmed as the business rule 2026-10-16). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme, not moved daily |
 | A-6 | "Last Updated" times from SAP use one time zone and can be compared across files. | Single SAP system |
-| A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). If SAP renames a component, the list in `app/constants.py` must be updated. | Look-alikes such as `ALWD EB2` and `ADDTNL PREMIUM 01` must be excluded |
-| A-8 | Qualification uses GSR (Q) for EB SLAB 1–3 and VALUE, and Invoiced Quantity (Q) for LUXURY, PREMIUM 01 and PREMIUM 02. EB FULL MONTH follows the EB slab working: SAP leaves its GSR (Q) empty, and on slab rows GSR (Q) always equals GSR (B), so its Qualification is GSR (B). Real sample: GSR (Q) = GSR (B) on every slab row; GSR (Q) empty on every EB FULL MONTH row. | Discussion and template values |
+| A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). If SAP renames a component, the list in `app/constants.py` must be updated. | Look-alikes such as `ALWD EB2`, `ADDTNL PREMIUM 01`, `VALUE SCH %` and `VALUE SCH FA` must be excluded. `VALUE %` and `VALUE FA` added on request (2026-10-16); both spellings found in the Sep/Oct 2026 SAP data |
+| A-8 | Qualification uses GSR (Q) for EB SLAB 1–3, VALUE, VALUE % and VALUE FA, and Invoiced Quantity (Q) for LUXURY, PREMIUM 01 and PREMIUM 02. EB FULL MONTH follows the EB slab working: SAP leaves its GSR (Q) empty, and on slab rows GSR (Q) always equals GSR (B), so its Qualification is GSR (B). Real sample: GSR (Q) = GSR (B) on 775 of 775 slab rows; GSR (Q) empty on all 774 EB FULL MONTH rows. VALUE % and VALUE FA follow VALUE (confirmed 2026-10-16); in the Sep/Oct 2026 SAP data their GSR (Q) is filled on 99% of rows, as on VALUE. | Discussion and template values |
 | A-9 | Dealer codes are compared without leading zeros (`0006100000001` = `6100000001`) and contain only letters and digits, at most 20 characters. | SAP pads codes with zeros |
 | A-10 | If a dealer has more than one agreement, one row per agreement per component is returned. The sample data has one agreement per dealer. | Sample file analysis |
 | A-11 | An unknown dealer, or a dealer without data in the requested month, returns `200` with an empty list, not `404`. | Simplest for consumers |
@@ -190,22 +189,9 @@ These assumptions were made while building the solution. Please confirm or corre
 | A-22 | SAP dates use `/`, `.` or `-` between day, month and year. Dates written with spaces (`01 08 2026`) are not read: such a row is bad and its file is marked failed. | Decided 2026-10-16 (not supported for now) |
 | A-23 | Amounts are finite numbers. `NaN` or `Infinity` in an amount column makes the row bad instead of being stored. | QA audit 2026-10-16 |
 
-## 8. Open questions and dependencies
-
-| # | Item | Needed for |
-|---|---|---|
-| 1 | GCS access (service-account key); the GCS path is confirmed | Connecting to real data |
-| 2 | Database credentials | Production data load |
-| 3 | ~~Decision on authentication~~ Decided 2026-10-15: OAuth2 client credentials + JWT Bearer tokens (1 hour). Remaining: DevOps create the clients and `JWT_SECRET` per environment and share the credentials with the client securely. | Go-live |
-| 4 | Deployment environment and base URLs (Dev, Production) | Go-live, HTTPS and rate-limit checks |
-| 5 | Whether the interactive docs page (`/docs`) is public in production | Security configuration |
-| 6 | ~~Start of month behaviour~~ Resolved: the client sends the month, so a month without data simply returns `[]`. | — |
-| 7 | ~~Month in the API 1 request~~ Built: `month` and `year` are required. Remaining: which earlier months must be loaded (backfilled) before go-live, and whether the endpoint should be renamed (its path still says `current-month`). | Go-live data, API naming |
-| 8 | Redis on UAT/Production: the `REDIS_URL` already set up for other dealer APIs, and whether this API shares it | Response cache |
-
 # Part B — Solution
 
-## 9. Solution overview and architecture
+## 8. Solution overview and architecture
 
 The solution has two parts that share a PostgreSQL database:
 
@@ -219,7 +205,7 @@ cannot break the API.
 
 ![Figure 3 — Solution architecture](figures/fig3_architecture.png)
 
-## 10. Technology stack
+## 9. Technology stack
 
 | Layer | Technology | Why |
 |---|---|---|
@@ -231,7 +217,7 @@ cannot break the API.
 | Packaging | uv | Locked, reproducible dependencies |
 | Testing | pytest, Postman/newman, Playwright, k6, bandit, pip-audit, OWASP ZAP | Unit, API, performance and security coverage |
 
-## 11. Data ingestion design
+## 10. Data ingestion design
 
 The cron job runs `python -m ingestion.run schemes`.
 Each run reads the current month's folder, `gs://acme-scheme-files/sap-exports/<year>/<month>/`
@@ -281,7 +267,7 @@ Key design points:
 
 Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 13 seconds.
 
-## 12. Data model
+## 11. Data model
 
 ![Figure 6 — Data model (PostgreSQL)](figures/fig6_data_model.png)
 
@@ -292,7 +278,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 
 `python -m ingestion.run init-db` creates the tables and upgrades older databases in place.
 
-## 13. API specification
+## 12. API specification
 
 **Conventions**
 
@@ -301,7 +287,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 | Base path | `/v1` |
 | Format | JSON request and response, UTF-8 |
 | Method | `POST` with a JSON body `{"dealer_code", "month", "year"}` |
-| Authentication | OAuth2 client credentials: `POST /v1/auth/token` returns a JWT valid 1 hour; send `Authorization: Bearer <token>` (section 13.3) |
+| Authentication | OAuth2 client credentials: `POST /v1/auth/token` returns a JWT valid 1 hour; send `Authorization: Bearer <token>` (section 12.3) |
 | Field naming | PascalCase in responses |
 | Empty result | `200` with `[]` |
 | Specification | OpenAPI 3: `docs/openapi.json` and a Swagger spec in `qa/swagger/`; Swagger UI at `/docs` when enabled |
@@ -314,7 +300,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 | POST | `/v1/schemes/current-month` | API 1 — dealer's scheme rows for the requested month | Bearer token |
 | GET | `/health` | Liveness check, returns `{"ok": true}` | None |
 
-### 13.1 Request body
+### 12.1 Request body
 
 ```json
 { "dealer_code": "6100000001", "month": 10, "year": 2026 }
@@ -326,7 +312,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 | `month` | integer or numeric string | Required; `1`–`9`, `01`–`09`, `10`, `11`, `12`, as numbers or strings (`9`, `09`, `"9"`, `"09"`); negatives, decimals, `0`, `009`, `010`, `0010`, `true`/`false` and text are rejected (422). A bare `09` works with any case of `Content-Type: application/json` |
 | `year` | integer or numeric string | Required; four digits, 2000–2100 (`2026` or `"2026"`); signs, decimals, spaces and `02026` are rejected (422) |
 
-### 13.2 API 1 — `POST /v1/schemes/current-month`
+### 12.2 API 1 — `POST /v1/schemes/current-month`
 
 **Example call**
 
@@ -337,7 +323,7 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
 
-**Example response — `200 OK`** (sample dealer; all 8 components)
+**Example response — `200 OK`** (sample dealer; all 10 components)
 
 ```json
 [
@@ -345,6 +331,8 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-18", "ComponentDescription": "EB SLAB 2", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-25", "ComponentDescription": "EB SLAB 3", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.25},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE %", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.5, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE FA", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.25, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "LUXURY", "Qualification": 315.1, "GsrB": 159292.8, "RebateRate": 1.0, "ClearCut": 1592.93, "ShortfallAmount": 84.9, "ShortfallPct": 21.23, "NextSlabRate": 1.5},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "PREMIUM 01", "Qualification": 0.0, "GsrB": 0.0, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 40.0, "ShortfallPct": 100.0, "NextSlabRate": 0.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "PREMIUM 02", "Qualification": 0.0, "GsrB": 0.0, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 8.0, "ShortfallPct": 100.0, "NextSlabRate": 0.0},
@@ -359,7 +347,7 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
 | `Customer` | string | Dealer code | Customer |
 | `FromDate` | date | Start of validity | Valid from |
 | `ToDate` | date | End of validity | To |
-| `ComponentDescription` | string | One of the 8 components | Comp desc |
+| `ComponentDescription` | string | One of the 10 components | Comp desc |
 | `Qualification` | number | GSR (EB, Value) or invoiced quantity (Luxury, Premium) | GSR (Q); GSR (B) for EB FULL MONTH; Invoiced Quantity(Q) |
 | `GsrB` | number | Gross Sales Revenue for the benefit | GSR (B) |
 | `RebateRate` | number | Rebate rate | Rebate Rate |
@@ -368,10 +356,10 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
 | `ShortfallPct` | number | Shortfall as a percentage | Short Fall % |
 | `NextSlabRate` | number | Rebate rate of the next slab | Next Slab Rate |
 
-Ordering: by `ToDate`, then in the order EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, LUXURY,
-PREMIUM 01, PREMIUM 02, EB FULL MONTH. Amounts can be negative or `null`.
+Ordering: by `ToDate`, then in the order EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA,
+LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. Amounts can be negative or `null`.
 
-### 13.3 Authentication — `POST /v1/auth/token`
+### 12.3 Authentication — `POST /v1/auth/token`
 
 OAuth2 client credentials (RFC 6749 §4.4) with JWT Bearer tokens (RFC 6750). Request:
 `grant_type=client_credentials`, form-encoded (standard) or JSON, with the client credentials as
@@ -397,11 +385,11 @@ Response `200`:
 | Token format | JWT signed with HS256; claims `iss`, `aud` (`scheme-api`), `sub` (client_id), `scope`, `iat`, `nbf`, `exp`, `jti` |
 | Cost per request | About 49 µs to check a token; no database or Redis lookup |
 
-### 13.4 Request lifecycle
+### 12.4 Request lifecycle
 
 ![Figure 5 — API request lifecycle and responses](figures/fig5_request_lifecycle.png)
 
-## 14. Error handling
+## 13. Error handling
 
 All errors are JSON with a `detail` field, except the token endpoint's, which use the OAuth2
 format `{"error", "error_description"}` (RFC 6749 §5.2). Errors never include stack traces, SQL,
@@ -435,7 +423,7 @@ Token endpoint (`POST /v1/auth/token`) errors:
 | 401 | `invalid_client` | Missing, unknown or wrong client credentials (an unknown client and a wrong secret give the same answer); `WWW-Authenticate: Basic` |
 | 429 | — (`{"detail": "Too many requests"}`) | Over `TOKEN_RATE_LIMIT_PER_MINUTE` (30) a minute from one IP; `Retry-After` set |
 
-## 15. Security design
+## 14. Security design
 
 | Control | Implementation |
 |---|---|
@@ -457,7 +445,7 @@ Token endpoint (`POST /v1/auth/token`) errors:
 | Docs page | Swagger UI (`/docs`, when `DOCS_ENABLED=true`) loads one pinned `swagger-ui-dist` release (5.32.15) from the CDN with Subresource Integrity (SHA-384) hashes, and its Content-Security-Policy allows only that release, so a changed CDN file is refused by the browser |
 | Secrets | Client secret hashes, `JWT_SECRET` and DB credentials come from environment variables or the environment's `.env.<env>` file, which is never committed |
 
-## 16. Configuration
+## 15. Configuration
 
 All settings are environment variables or a settings file per environment, chosen by `APP_ENV`:
 `.env.local` (default), `.env.dev`, `.env.uat`, `.env.prod`. Environment variables win over the file.
@@ -485,13 +473,13 @@ are available for per-environment releases.
 | `LOCAL_DATA_DIR` | — | Read files from a local folder instead of GCS (development) |
 | `LOADER_WORKERS` | `4` | Files the cron job downloads and parses in parallel while saving the current one |
 | `TIMEZONE` | `Asia/Kolkata` | Decides the cron job's default month (the current month in this timezone); the API always takes the month from the request |
-| `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 18.1) |
+| `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 17.1) |
 | `REDIS_URL` | — | Redis for the cache, e.g. `redis://host:6379/0`; the cache runs only when this is set and `CACHE_ENABLED=true` |
 | `CACHE_TTL_SECONDS` | `900` | Longest a cached response lives; new data replaces it sooner |
 | `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limit on or off |
 | `RATE_LIMIT_PER_SECOND` | `2500` | Requests per second from one client IP before 429; counted in Redis when `REDIS_URL` is set, else per worker |
 
-## 17. Project structure
+## 16. Project structure
 
 ```
 scheme-api/
@@ -505,7 +493,7 @@ scheme-api/
 │   ├── security.py       OAuth2 token endpoint, JWT Bearer check, client/key generator CLI
 │   ├── middleware.py     security headers, body size limit, zero-padded month
 │   ├── ratelimit.py      per-IP rate limit (429)
-│   ├── constants.py      the 8 components and qualification rules
+│   ├── constants.py      the 10 components and qualification rules
 │   └── config.py         settings from environment variables
 ├── ingestion/            cron job
 │   ├── run.py            entry point: init-db, schemes
@@ -527,7 +515,7 @@ scheme-api/
 └── scripts/              sample data, OpenAPI export, figures
 ```
 
-## 18. Deployment and operations
+## 17. Deployment and operations
 
 **Local development and testing:** follow *Getting started (step by step)* in the repository
 `README.md` (install, sample data, run, try a request, troubleshooting). QA follow the
@@ -562,7 +550,7 @@ uv run python -m ingestion.run init-db
   first file not yet loaded, since each file is saved in one transaction.
 - Total database connections = workers × `DB_POOL_MAX` (default 40 for 4 workers).
 
-### 18.1 Response cache (Redis)
+### 17.1 Response cache (Redis)
 
 The dealer app loads data with many parallel requests: about 600 a minute were
 planned, up to 1 lakh a minute (≈ 1,700 a second) were seen. The data only changes when the cron
@@ -580,9 +568,9 @@ job loads new files, so API responses are cached in Redis, as already done for o
 
 Measured on a laptop at 1,700 requests/s for 2 minutes (`qa/k6/rate.js`): without the cache
 1,596/s got through, p95 1.4 s; with a warm cache 1,695/s, median 1.3 ms, p95 92 ms; 0 errors in
-both (details in section 20).
+both (details in section 19).
 
-## 19. Postman collection and Swagger spec
+## 18. Postman collection and Swagger spec
 
 Files in `qa/postman/`: the API 1 collection and its environments. They are generated by
 `qa/postman/build_collection.py` (edit requests and tests there, then regenerate); a unit test fails
@@ -635,7 +623,7 @@ Command line:
 npx newman run Scheme_API1_Current_Month.postman_collection.json -e Local.postman_environment.json
 ```
 
-## 20. Testing and quality results
+## 19. Testing and quality results
 
 **QA audit, 16 October 2026 (local, auth on).** Exploratory testing against the Swagger spec, a
 review of the API and loader code, then fixes with regression tests. Full findings: `qa/TEST_RESULTS.md`.
