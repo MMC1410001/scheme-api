@@ -8,7 +8,11 @@
 | Version | 0.8 (draft) — API 1 only; QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI (0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
 =======
 | Consumer | The client team |
+<<<<<<< sanitised
 | Version | 0.9 (draft) — API 1 only; adds components VALUE % and VALUE FA (GSR (Q), after VALUE) (0.8: QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI; 0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
+>>>>>>> office-new
+=======
+| Version | 0.11 (draft) — API 1 only; the API runs the loader itself once a day at 09:00 IST (with retries), so no separate cron job is needed (0.10: each component is returned once per start date, SAP's newest update; 0.9: components VALUE % and VALUE FA; 0.8: QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI; 0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
 >>>>>>> office-new
 | Date | 16 October 2026 |
 | Author | Project team |
@@ -91,8 +95,8 @@ returns it to the client's systems on request.
 | FR-4 | EB slabs are returned as separate rows (one row per slab). | Must |
 | FR-5 | Qualification is the GSR value for EB and Value, and the invoiced quantity for Premium and Luxury. EB FULL MONTH follows the same GSR working as the EB slabs. | Must |
 | FR-6 | Rows are sorted by validity date. | Must |
-| FR-7 | Only the requested month's data is returned. A row belongs to every month its validity period (From–To) overlaps, whichever GCS folder its file came from; the newest update of an agreement wins; rows without dates use their folder's month. The database keeps every month. | Must |
-| FR-8 | SAP exports are loaded from GCS automatically by a scheduled (cron) job. | Must |
+| FR-7 | Only the requested month's data is returned. A row belongs to every month its validity period (From–To) overlaps, whichever GCS folder its file came from; each component is returned once per start date (SAP's newest update, see A-5); rows without dates use their folder's month. The database keeps every month. | Must |
+| FR-8 | SAP exports are loaded from GCS automatically on a schedule (daily at 09:00 India time, run by the API itself; section 10). | Must |
 | FR-9 | Each daily file holds only that day's updates, so the API must show the latest version of every row across all of the month's files. | Must |
 | FR-10 | Dealer code and customer code are the same identifier. | Must |
 
@@ -162,7 +166,7 @@ One row per component: the columns of the agreed API template, then `NextSlabRat
 | NFR-8 | Performance | Peak load from the dealer app (Acme Opus): planned 600 requests a minute, observed up to 1 lakh a minute | 1,700 requests/s with < 1% errors; Redis response cache (section 17.1) |
 >>>>>>> office-new
 | NFR-2 | Availability | When overloaded, fail fast with a retryable response instead of hanging | 503 with Retry-After within 5 s |
-| NFR-3 | Freshness | New SAP exports appear in the API without manual steps | Within one cron cycle (suggested 30 minutes) |
+| NFR-3 | Freshness | New SAP exports appear in the API without manual steps | Same day: loaded at 09:00 IST (SAP's files land around 04:30–05:00) |
 | NFR-4 | Security | Protected against OWASP API Top 10 risks; no data leakage in errors | No ZAP failures, no bandit findings, no known CVEs |
 | NFR-5 | Auditability | Every stored row keeps its original SAP values and source file name | Raw row stored with each record |
 | NFR-6 | Reliability | Re-running the job or loading files out of order never produces wrong data | Idempotent loads; newest update wins |
@@ -174,11 +178,19 @@ These assumptions were made while building the solution. Please confirm or corre
 
 | ID | Assumption | Basis |
 |---|---|---|
+<<<<<<< sanitised
 | A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as `1`–`9`, `01`–`09`, `10`, `11` or `12`; longer forms such as `010` or `0010` are rejected). A month whose SAP exports have not been loaded returns an empty list. The cron job loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month) |
 | A-2 | A row belongs to every month its validity period overlaps, not to the folder its file is in. A month folder can also hold SAP updates of the previous month's schemes, so the folder month is not used. A scheme running across two months is reported in both. | Decided 2026-10-15 (was: folder month) |
 | A-3 | The API template's date headers are swapped (the column labelled "To Date" holds start dates). The API returns `FromDate` = SAP "Valid from" and `ToDate` = SAP "To". | Template sample values |
 | A-4 | The template is the final output, plus `NextSlabRate` (SAP "Next Slab Rate"), added after it as the last field of each row on 2026-10-15. Prepaid rate and customer name (from the first discussion) are not returned; "Rebate rate" is taken to be the rate that was meant. | Template confirmed; next slab rate requested 2026-10-15 |
 | A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. If SAP ever corrects a row's dates, the old period stays stored and is returned for the months it overlaps (decided 2026-10-15, re-confirmed as the business rule 2026-10-16). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme, not moved daily |
+=======
+| A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as `1`–`9`, `01`–`09`, `10`, `11` or `12`; longer forms such as `010` or `0010` are rejected). A month whose SAP exports have not been loaded returns an empty list. The scheduled loader loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month) |
+| A-2 | A row belongs to every month its validity period overlaps, not to the folder its file is in. Changed 2026-10-15: dev data showed the September folder also holds SAP updates of August schemes, so the folder rule returned August rows for September. A scheme running across two months is reported in both. | Decided 2026-10-15 (was: folder month) |
+| A-3 | The API template's date headers are swapped (the column labelled "To Date" holds start dates). The API returns `FromDate` = SAP "Valid from" and `ToDate` = SAP "To". | Template sample values |
+| A-4 | The template is the final output, plus `NextSlabRate` (SAP "Next Slab Rate"), added after it as the last field of each row on 2026-10-15. Prepaid rate and customer name (from the first discussion) are not returned; "Rebate rate" is taken to be the rate that was meant. | Template confirmed; next slab rate requested 2026-10-15 |
+| A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. The API returns one row per component and start date (Valid From): the one with the newest "Last Updated" (then the newer folder, then the higher agreement number). So when SAP corrects a row's end date (dev, Sept 2026: EB SLAB 2 1–18 Sep, then 1–19 Sep) or re-issues a dealer's schemes under a new agreement number with the same dates, only the newest version is returned; older versions stay stored (decided 2026-10-16; replaces the 2026-10-15 rule that returned every stored period). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme (e.g. EB SLAB 2 1–18 Aug, EB SLAB 3 1–25 Aug), not moved daily; reviewed 2026-10-15 |
+>>>>>>> office-new
 | A-6 | "Last Updated" times from SAP use one time zone and can be compared across files. | Single SAP system |
 <<<<<<< sanitised
 | A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). If SAP renames a component, the list in `app/constants.py` must be updated. | Look-alikes such as `ALWD EB2` and `ADDTNL PREMIUM 01` must be excluded |
@@ -194,7 +206,7 @@ These assumptions were made while building the solution. Please confirm or corre
 | A-13 | SAP exports are in bucket `acme-scheme-files`, folder `sap-exports/<year>/<month>/` (confirmed: `sap-exports/2026/10`). Folders for January–September are assumed to be `01`–`09`; the job also reads `1`–`9`, so if both exist neither is missed (changed 2026-10-16: it used to stop at the first one). | Path confirmed; QA audit 2026-10-16 |
 | A-14 | Callers authenticate with OAuth2 client credentials: each caller (the client, QA) gets a `client_id` and `client_secret` per environment, exchanges them at `POST /v1/auth/token` for a JWT Bearer token valid for 1 hour, and reuses it until shortly before it expires. Outside local development the API does not start without auth settings; auth can be off only when `APP_ENV=local` is set explicitly, so a server that forgets `APP_ENV` does not run open. Locally the client is `local-client` / `local-test-secret` (matching the Postman Local environment); these published values are accepted only with `APP_ENV=local` set explicitly (added 2026-10-16), so a server that forgets `APP_ENV` cannot run on them either. The `X-API-Key` header is no longer accepted. | Decided 2026-10-15 (was: optional `X-API-Key`); security review (explicit `APP_ENV=local` for auth off: security review of 15 October 2026) |
 | A-15 | The project team's existing PostgreSQL database is used. A separate database can be created quickly if needed. | Decision in discussion |
-| A-16 | The cron job runs every 30 minutes; SAP exports arrive several times a day. | ~550 files a month |
+| A-16 | The loader runs once a day at 09:00 IST (team decision 2026-10-19); SAP exports arrive once a day (in October 2026 about 23 files around 04:30–04:50 IST), so data is up to date from 09:00. | ~550 files a month |
 | A-17 | HTTPS termination is provided by the hosting gateway or load balancer. The API itself limits each client IP to 2,500 requests a second (added 2026-10-15). The proxy appends the caller's IP to `X-Forwarded-For`, and its address is listed in `TRUSTED_PROXIES`; `X-Forwarded-For` from any other address is ignored, so a caller cannot choose its own IP (changed 2026-10-16). | Standard deployment; rate limit requested 2026-10-15; QA audit 2026-10-16 |
 | A-18 | Expected load is modelled as 150 concurrent users, as in the existing dealer API tests. Actual client call volumes are not known. | Existing test practice |
 | A-19 | Only `.csv` and `.xlsx` files are loaded from GCS. | Formats seen so far |
@@ -225,7 +237,7 @@ These assumptions were made while building the solution. Please confirm or corre
 
 The solution has two parts that share a PostgreSQL database:
 
-1. **Ingestion job (cron).** Lists new files in GCS, validates and parses them, and stores the
+1. **Ingestion job (run by the API daily at 09:00 IST).** Lists new files in GCS, validates and parses them, and stores the
    latest version of each scheme row. Files already loaded are skipped.
 2. **API service (FastAPI).** Answers dealer lookups from the database. Each request is a single
    indexed query, so responses are fast and do not depend on file sizes.
@@ -249,7 +261,23 @@ cannot break the API.
 
 ## 10. Data ingestion design
 
-The cron job runs `python -m ingestion.run schemes`.
+The API runs `python -m ingestion.run schemes` itself (`app/scheduler.py`); no cron job is needed.
+Until 2026-10-19 the design relied on a cron job that was never set up on dev, so new files were loaded
+only by manual runs.
+
+- **When:** once a day at `LOADER_DAILY_AT` (09:00 India time). On days 1–3 of a month
+  (`LOADER_CATCH_UP_DAYS`) the previous month is loaded too, so files of its last day are not missed.
+  A restart does not trigger a load.
+- **Isolation:** each run is a child process, so a slow or failing load never blocks API requests.
+- **One scheduler:** with several workers or servers, only the one holding a Postgres advisory lock
+  runs the load; if it dies, another takes over the next day.
+- **Failures:** a failed run (GCS or database down, bad file, longer than `LOADER_TIMEOUT_MINUTES` =
+  120) is logged at ERROR and tried again up to `LOADER_RETRIES` (3) times, `LOADER_RETRY_MINUTES` (30)
+  apart, carrying on from the files already loaded. If all tries fail, the next is the next day at
+  09:00, or the loader can be run by hand.
+- **Switch:** on everywhere except `APP_ENV=local`; `LOADER_SCHEDULE_ENABLED=false` turns it off where
+  a cron job runs the loader instead.
+
 Each run reads the current month's folder, `gs://acme-scheme-files/sap-exports/<year>/<month>/`
 (for example `.../2026/10/`, then `.../2026/11/`). Months 1–9 are read from both `01` and `1`
 (if both exist, files from both are loaded), and the job logs a warning if neither has files yet.
@@ -277,7 +305,7 @@ Key design points:
   which gives exactly the result of upserting the rows one by one (proved by a randomized database
   test). Real September files: about 6 s per file from a laptop (download-bound), against about 30 s
   with one statement per row; saving takes 0.3–0.5 s.
-- **One run at a time.** A Postgres advisory lock stops a second run (e.g. the next cron run during
+- **One run at a time.** A Postgres advisory lock stops a second run (e.g. the next scheduled run during
   a long backfill); it is released when the run's connection closes, even if the process dies.
   After a network drop the server may keep the old session (and the lock) alive; the run names its
   sessions, so on reconnect it ends its own stale session and carries on.
@@ -501,8 +529,14 @@ are available for per-environment releases.
 | `SCHEME_PREFIX_TEMPLATE` | `sap-exports/{year}/{month:02d}/` | Folder of a month's SAP exports (tries `01`, then `1`) |
 | `APP_ENV` | `local` | Which settings file to read: `.env.local`, `.env.dev`, `.env.uat` or `.env.prod`. Set it on every server; with `APP_ENV` unset the API starts only if auth is configured and is not the `.env.example` example |
 | `LOCAL_DATA_DIR` | — | Read files from a local folder instead of GCS (development) |
-| `LOADER_WORKERS` | `4` | Files the cron job downloads and parses in parallel while saving the current one |
-| `TIMEZONE` | `Asia/Kolkata` | Decides the cron job's default month (the current month in this timezone); the API always takes the month from the request |
+| `LOADER_WORKERS` | `4` | Files the loader downloads and parses in parallel while saving the current one |
+| `TIMEZONE` | `Asia/Kolkata` | Decides the loader's default month (the current month in this timezone); the API always takes the month from the request |
+| `LOADER_SCHEDULE_ENABLED` | on outside `local` | The API runs the loader on a schedule (section 10); `false` where a cron job runs it instead |
+| `LOADER_DAILY_AT` | `09:00` | Daily run time (HH:MM in `TIMEZONE`) |
+| `LOADER_RETRIES` | `3` | Tries again after a failed daily run |
+| `LOADER_RETRY_MINUTES` | `30` | Wait between those tries |
+| `LOADER_TIMEOUT_MINUTES` | `120` | A scheduled run taking longer is stopped; the next one carries on |
+| `LOADER_CATCH_UP_DAYS` | `3` | On days 1 to this of a month the previous month is loaded too |
 | `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 17.1) |
 | `REDIS_URL` | — | Redis for the cache, e.g. `redis://host:6379/0`; the cache runs only when this is set and `CACHE_ENABLED=true` |
 | `CACHE_TTL_SECONDS` | `900` | Longest a cached response lives; new data replaces it sooner |
@@ -525,7 +559,7 @@ scheme-api/
 │   ├── ratelimit.py      per-IP rate limit (429)
 │   ├── constants.py      the 10 components and qualification rules
 │   └── config.py         settings from environment variables
-├── ingestion/            cron job
+├── ingestion/            loader (run by the API's schedule)
 │   ├── run.py            entry point: init-db, schemes
 │   ├── sources.py        list/read files in GCS (or a local folder)
 │   ├── excel.py          CSV/Excel streaming reader, header joining
@@ -564,32 +598,41 @@ uvicorn directly, use `uvicorn app.main:app … --no-server-header --no-proxy-he
 16 October 2026: the earlier `--proxy-headers --forwarded-allow-ips` command no longer decides the
 client IP.
 
-**Create tables once, then schedule the loader:**
+**Create tables once; the API then runs the loader daily at 09:00 IST:**
 
 ```bash
 uv run python -m ingestion.run init-db
-# crontab: every 30 minutes
-*/30 * * * * cd /path/to/api && uv run python -m ingestion.run schemes
 ```
+
+The API needs the GCS settings too (the key file at `GOOGLE_APPLICATION_CREDENTIALS` must exist on
+the server). After a deploy the log shows `Loader schedule on: daily at 09:00 Asia/Kolkata`, and
+`Scheduled load of <year>-<month> finished` after 09:00 each day.
 
 **Operational checks**
 
 - `GET /health` for liveness probes.
-- Cron job exit code 1 means at least one file failed; the log names the file and the reason.
+- `Scheduled load of <year>-<month> exited with code 1` in the API log means at least one file failed;
+  the loader's lines above it name the file and the reason.
 - A dropped database connection is retried (5 attempts, 10 s apart); the job resumes from the
   first file not yet loaded, since each file is saved in one transaction.
 - Total database connections = workers × `DB_POOL_MAX` (default 40 for 4 workers).
 
 ### 17.1 Response cache (Redis)
 
+<<<<<<< sanitised
 The dealer app loads data with many parallel requests: about 600 a minute were
 planned, up to 1 lakh a minute (≈ 1,700 a second) were seen. The data only changes when the cron
 job loads new files, so API responses are cached in Redis, as already done for other dealer APIs on UAT.
+=======
+The dealer app (Acme Opus) loads data with many parallel requests: about 600 a minute were
+planned, up to 1 lakh a minute (≈ 1,700 a second) were seen. The data only changes when the loader
+loads new files, so API responses are cached in Redis, as Dev did for the dealer APIs on UAT.
+>>>>>>> office-new
 
 - **Switch:** `CACHE_ENABLED=true` and `REDIS_URL` turn it on; either one missing turns it off
   (default off).
 - **Key:** API, dealer code (normalised), month and year; empty answers are cached too.
-- **Freshness:** every key includes a data version; after loading anything the cron job bumps it,
+- **Freshness:** every key includes a data version; after loading anything the loader bumps it,
   so the next request reads the new data. `CACHE_TTL_SECONDS` (900) is the upper bound.
 - **Failure:** Redis calls time out after 0.25 s; on an error the API answers from the database
   and does not try Redis again for 30 s. Redis is never required for the API to work.

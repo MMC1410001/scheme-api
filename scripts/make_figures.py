@@ -73,7 +73,7 @@ box(ax, 22, 12, 19, 16, "Cloud Storage (GCS)\nSAP exports by\nyear / month folde
 box(ax, 48, 12, 19, 16, "Scheme API\n(this project)\nAPI 1: monthly schemes", "ours")
 box(ax, 83, 12, 15, 16, "Client team\nsystems / tools\ncall the APIs", "client")
 arrow(ax, (15.8, 20), (21.2, 20), "daily CSV\nexports", loff=(0, 0.8))
-arrow(ax, (41.8, 20), (47.2, 20), "cron\nload", loff=(0, 0.8))
+arrow(ax, (41.8, 20), (47.2, 20), "daily load\n09:00 IST", loff=(0, 0.8))
 arrow(ax, (67.8, 22.5), (82.2, 22.5), "dealer + month", loff=(0, 0.6))
 arrow(ax, (82.2, 17.5), (67.8, 17.5), "response: JSON rows", loff=(0, -4.2))
 ax.text(1, 4, "Grey: existing systems   Green: storage   Blue: built in this project   Orange: API consumer",
@@ -95,7 +95,7 @@ fig, ax = canvas(10, 6.4)
 title(ax, "Figure 3 — Solution architecture")
 box(ax, 1, 46, 17, 10, "SAP / the client\nexport job", "ext")
 box(ax, 24, 31, 20, 25, "GCS bucket\n\nsap-exports/YYYY/MM/\n  sap-exports_*.csv", "store", align="left")
-box(ax, 50, 38, 22, 18, "Ingestion job (cron)\npython -m ingestion.run\n\n1 list new files\n2 parse + validate\n3 upsert newest rows", "ours", align="left")
+box(ax, 50, 38, 22, 18, "Ingestion job\ndaily 09:00 IST (by the API)\npython -m ingestion.run\n1 list new files\n2 parse + validate\n3 upsert newest rows", "ours", align="left")
 box(ax, 50, 4, 22, 27, "PostgreSQL\n\nscheme_records\n  (latest row per dealer,\n   agreement, suffix,\n   period)\ningested_files\n  (which files are loaded)", "store", align="left")
 box(ax, 78, 22, 21, 34, "FastAPI service\nuvicorn x 4 workers\n\nSecurity middleware\n  headers, 4 KB limit\nBearer JWT check\nRoutes /v1/auth/token,\n  /v1/schemes/...\nRepository\n  pooled, parameterised\n  SQL (pool -> 503)", "ours", align="left")
 box(ax, 78, 4, 21, 12, "the client systems\ntoken once an hour;\nPOST {dealer_code,\nmonth, year} <- rows", "client")
@@ -111,7 +111,7 @@ save(fig, "fig3_architecture")
 fig, ax = canvas(10, 5.4)
 title(ax, "Figure 4 — Ingestion job: what happens to each file")
 steps = [
-    ("Cron starts\n(every\n30 min)", "ext"),
+    ("API starts\nthe loader\n(daily 09:00)", "ext"),
     ("List files in\nthis month's\nfolder", "ours"),
     ("Read CSV,\ncheck\ncolumns", "ours"),
     ("One of the\n10 compo-\nnents?", "ours"),

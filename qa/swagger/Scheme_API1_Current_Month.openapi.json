@@ -27,7 +27,7 @@
           "schemes"
         ],
         "summary": "API 1: a dealer's scheme rows for the requested month",
-        "description": "The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given\nmonth and year, ordered by end date (the API template's order).\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Returns an empty list when the dealer has no data for that month.",
+        "description": "The dealer's EB SLAB 1-3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows\nfor the given month and year, ordered by end date (the API template's order).\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Each component comes back once per start date: SAP's newest update,\neven if SAP changed the end date or re-issued the scheme under a new agreement number.\nReturns an empty list when the dealer has no data for that month.",
         "operationId": "month_schemes_v1_schemes_current_month_post",
         "requestBody": {
           "content": {

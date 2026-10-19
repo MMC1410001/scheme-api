@@ -26,9 +26,12 @@ class Repository:
     def month_schemes(self, dealer_code: str, year: int, month: int) -> list[dict[str, Any]]:
         # A row belongs to every month its validity period (From..To) overlaps, whichever GCS month
         # folder its file sat in: SAP keeps updating last month's schemes in the first days of the
-        # next month's folder. A row without dates falls back to its folder's month. The same
-        # agreement and period can be stored under two folders; the newest SAP update wins (the
-        # period is part of the key so an agreement reused for another month is never dropped).
+        # next month's folder. A row without dates falls back to its folder's month. One component
+        # and start date is one scheme: only its newest SAP update is returned, from any folder, even
+        # when SAP changed the end date (1-18 Sep corrected to 1-19 Sep) or re-issued the scheme
+        # under a new agreement number. A scheme for another month starts on another date, so it
+        # stays a separate row. The newest row is picked before the end date is checked, so an old
+        # end date can't bring it back. Equal update times: the newer folder, then the higher agreement.
         # Same order as the API template: by end date, then the template's component order.
         first = date(year, month, 1)
         last = date(year, month, calendar.monthrange(year, month)[1])
@@ -38,13 +41,14 @@ class Repository:
                    component AS component_description, qualification, gsr_b,
                    rebate_rate, clear_cut, shortfall_amount, shortfall_pct, next_slab_rate
             FROM (
-                SELECT DISTINCT ON (agreement, deal_suffix, valid_from, valid_to) *
+                SELECT DISTINCT ON (component, valid_from) *
                 FROM scheme_records
                 WHERE dealer_code = %(dealer)s
                   AND CASE WHEN valid_from IS NULL THEN year = %(year)s AND month = %(month)s
-                           ELSE valid_from <= %(last)s AND coalesce(valid_to, valid_from) >= %(first)s END
-                ORDER BY agreement, deal_suffix, valid_from, valid_to, last_updated_at DESC, year DESC, month DESC
+                           ELSE valid_from <= %(last)s END
+                ORDER BY component, valid_from, last_updated_at DESC, year DESC, month DESC, agreement DESC
             ) latest
+            WHERE valid_from IS NULL OR coalesce(valid_to, valid_from) >= %(first)s
             ORDER BY valid_to NULLS LAST, array_position(%(components)s::text[], component), agreement
             """,
             {"dealer": dealer_code, "year": year, "month": month, "first": first, "last": last,

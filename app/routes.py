@@ -37,11 +37,13 @@ def month_schemes(
     repo: Repository = Depends(get_repository),
     cache: ResponseCache = Depends(get_cache),
 ) -> Response:
-    """The dealer's EB SLAB 1-3, VALUE, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows for the given
-    month and year, ordered by end date (the API template's order).
+    """The dealer's EB SLAB 1-3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows
+    for the given month and year, ordered by end date (the API template's order).
 
     A row belongs to every month its validity period overlaps (rows without dates: the GCS month
-    folder its file came from). Returns an empty list when the dealer has no data for that month.
+    folder its file came from). Each component comes back once per start date: SAP's newest update,
+    even if SAP changed the end date or re-issued the scheme under a new agreement number.
+    Returns an empty list when the dealer has no data for that month.
     """
     dealer_code = normalize_dealer_code(body.dealer_code)
 

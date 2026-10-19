@@ -15,6 +15,7 @@ from app.middleware import (
 )
 from app.ratelimit import RateLimitMiddleware
 from app.routes import router
+from app.scheduler import LoaderScheduler
 from app.security import TOKEN_URL, auth_router, config_problems
 
 log = logging.getLogger("app")
@@ -24,7 +25,12 @@ log = logging.getLogger("app")
 async def lifespan(app: FastAPI):
     db.open_pool()
     cache.open_cache(settings.cache_enabled, settings.redis_url, settings.cache_ttl_seconds)
+    scheduler = LoaderScheduler(settings) if settings.loader_schedule_on else None
+    if scheduler:
+        scheduler.start()
     yield
+    if scheduler:
+        await scheduler.stop()
     cache.close_cache()
     db.close_pool()
 

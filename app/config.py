@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from functools import lru_cache
 from ipaddress import ip_network
 from typing import Annotated
@@ -69,6 +70,22 @@ class Settings(BaseSettings):
     scheme_header_rows: int = 1
     # Files the loader downloads and parses ahead, in parallel, while it saves the current one.
     loader_workers: int = 4
+    # The API runs the loader on a schedule (app/scheduler.py), so no separate cron job is needed.
+    # Unset: on everywhere except APP_ENV=local. Set false where a cron job runs the loader instead.
+    loader_schedule_enabled: bool | None = None
+    # Daily run time, HH:MM in TIMEZONE. SAP's files land around 04:30-05:00 India time.
+    loader_daily_at: str = "09:00"
+    # A failed run is tried again this many times, this many minutes apart.
+    loader_retries: int = 3
+    loader_retry_minutes: int = 30
+    # A run taking longer is stopped (and counts as failed); a retry carries on from the files loaded.
+    loader_timeout_minutes: int = 120
+    # In the first days of a month the previous month is loaded too (late files of its last day).
+    loader_catch_up_days: int = 3
+
+    @property
+    def loader_schedule_on(self) -> bool:
+        return APP_ENV != "local" if self.loader_schedule_enabled is None else self.loader_schedule_enabled
 
 
     @field_validator("auth_clients", mode="before")
@@ -88,6 +105,19 @@ class Settings(BaseSettings):
         for entry in value:
             ip_network(entry, strict=False)  # ValueError names the bad entry
         return value
+
+    @field_validator("loader_schedule_enabled", mode="before")
+    @classmethod
+    def _empty_is_default(cls, value):
+        """LOADER_SCHEDULE_ENABLED= (as in .env.example) means the default, not an invalid boolean."""
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("loader_daily_at")
+    @classmethod
+    def _parse_daily_at(cls, value: str) -> str:
+        """HH:MM, checked at start-up so a typo stops the API instead of silently never loading."""
+        parsed = datetime.strptime(value.strip(), "%H:%M").time()
+        return f"{parsed.hour:02d}:{parsed.minute:02d}"
 
     @field_validator("jwt_secret", "jwt_previous_secret", mode="before")
     @classmethod

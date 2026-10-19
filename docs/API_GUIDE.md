@@ -182,8 +182,9 @@ once SAP has exported it for the month, so early in the month a dealer may have 
 
 **Months:** a row belongs to every month its validity period (`FromDate`–`ToDate`) overlaps, not to
 the SAP export folder it came from: SAP keeps updating last month's schemes in the first days of the
-new month's folder, and those rows stay in last month. If an agreement was updated in two folders, the
-newest update is returned. Rows without dates fall back to their folder's month. A new month's data
+new month's folder, and those rows stay in last month. Each component is returned once per start
+date (`FromDate`): SAP's newest update, from any folder, even if SAP changed the end date or
+re-issued the scheme under a new agreement number. Rows without dates fall back to their folder's month. A new month's data
 appears once its first SAP export has been loaded (usually within hours of the 1st); until then
 that month returns `[]`. Earlier months stay available.
 

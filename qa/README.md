@@ -62,7 +62,7 @@ Check it's up: `curl http://localhost:8000/health` returns `{"ok":true}`.
    To force a new token, clear `accessToken` in the collection's **Variables** tab.
 4. Each request's checks are under **Scripts → Post-response**; saved example responses are under
    **Examples** in the sidebar (click the arrow next to the request).
-5. To run everything: click the collection → **Run**. Expect 65 requests, 308 checks passed (Local,
+5. To run everything: click the collection → **Run**. Expect 65 requests, 309 checks passed (Local,
    auth on). The run makes 13 token requests; wait a minute between full runs (token rate limit).
 
 API 1 needs a month: its requests send `month` and `year`, which default to the current month (India
@@ -357,7 +357,7 @@ data is; override with `MONTH` / `YEAR`).
 | API1_TC_11 | Functional | Month with no data (January 2000) | 200 `[]` |
 | API1_TC_12 | Validation | Date format and range | `YYYY-MM-DD`, FromDate ≤ ToDate |
 | API1_TC_13 | Validation | Amount types | Numbers or null, never strings |
-| API1_TC_14 | Validation | Component uniqueness | Each component once per dealer |
+| API1_TC_14 | Validation | Component uniqueness | Each component once per dealer (newest SAP update only; no old end date or old agreement) |
 | API1_TC_15 | Validation | Month | Every row's validity period overlaps the requested month |
 | API1_TC_16 | Validation | [sample] All 10 components | Present for 6100000001 |
 | API1_TC_17 | Validation | [sample] Latest update wins | Day-2 LUXURY values replace day 1 (not added) |

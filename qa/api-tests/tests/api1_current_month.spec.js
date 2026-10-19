@@ -116,7 +116,9 @@ test.describe('API 1 - Monthly schemes', () => {
       }
     });
 
-    test('API1_TC_14 Each component appears at most once per dealer (single agreement)', async () => {
+    test('API1_TC_14 Each component appears at most once per dealer (newest SAP update only)', async () => {
+      // SAP can resend a scheme with a corrected end date or under a new agreement number; only the
+      // newest version may come back (dev, Sept 2026: EB SLAB 2 1-18 Sep and 1-19 Sep both returned).
       const names = (await rowsFor(DEALER)).map((r) => r.ComponentDescription);
       expect(new Set(names).size).toBe(names.length);
     });
