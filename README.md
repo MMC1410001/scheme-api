@@ -2,12 +2,13 @@
 
 Scheme data for the client team.
 
-SAP scheme files land in GCS every day (one folder per month). A cron job loads them into
-Postgres, and the API reads from Postgres.
+SAP scheme files land in GCS every day (one folder per month). The API itself runs the loader
+once a day at 09:00 India time (no separate cron job to set up), which loads them into Postgres, and the API reads
+from Postgres.
 
 ```
 GCS (daily SAP scheme files)
-   │   cron: python -m ingestion.run schemes
+   │   daily 09:00 IST, started by the API: python -m ingestion.run schemes
    ▼
 Postgres ──► FastAPI ──► the client
 ```
@@ -102,8 +103,8 @@ uv run python scripts/make_sample_data.py        # writes made-up SAP files into
 uv run python -m ingestion.run schemes           # loads them into the database
 ```
 
-You should see `Done: {... 'files_loaded': 2, 'rows_loaded': 17}`. This is the same job that runs on a
-schedule (cron) in production.
+You should see `Done: {... 'files_loaded': 2, 'rows_loaded': 17}`. This is the same job the API runs on a
+schedule outside `APP_ENV=local` (see *Loader schedule*).
 
 ### Step 6 — Start the API
 
@@ -198,6 +199,7 @@ up to 50,000 rows per file, several files a day).
   the version with the newest "Last Updated Date/Time" wins, whatever order files are loaded in.
   The period is part of the key because one month's folder can hold the same agreement and suffix
   for two periods (late SAP updates of last month's scheme next to this month's); both are kept.
+  The API then returns only the newest row per component and start date (see below).
 - Qualification = `GSR (Q)` for EB SLAB 1–3 and Value (VALUE, VALUE %, VALUE FA), `Invoiced Quantity(Q)` for Luxury and Premium.
   EB FULL MONTH follows the EB slab working: SAP leaves its `GSR (Q)` empty (on slab rows `GSR (Q)`
   always equals `GSR (B)`), so its Qualification is `GSR (B)`.
@@ -208,8 +210,10 @@ up to 50,000 rows per file, several files a day).
   (required: a file without it is rejected like any other missing column).
 - Dates are DD/MM/YYYY; SAP negatives like `882.00-` become -882.
 - A row belongs to every month its validity period (From–To) overlaps, not to its file's month folder
-  (the September folder also holds late updates of August schemes). The newest update of an agreement
-  wins; rows without dates use their folder's month.
+  (the September folder also holds late updates of August schemes); rows without dates use their
+  folder's month. Each component is returned once per start date (Valid from): SAP's newest update
+  wins, even if SAP changed the end date (1–18 Sep corrected to 1–19 Sep) or re-issued the scheme
+  under a new agreement number. Older versions stay in the database.
 - Dealer codes are compared without leading zeros (`0006100000001` = `6100000001`).
 - EB amounts are running totals from the 1st: EB SLAB 1 (1–10 Oct, 10 lakh) is included in EB SLAB 2
   (1–15 Oct, 12 lakh), so 2 lakh were added, not 22. Each row is returned as SAP sends it and rows are
@@ -285,13 +289,33 @@ Rotating `JWT_SECRET` without downtime: move the current value to `JWT_PREVIOUS_
 Outside `APP_ENV=local` the API refuses to start unless `AUTH_CLIENTS` and `JWT_SECRET` are set and
 valid, and it refuses the local example values from `.env.example`, also when `APP_ENV` is not set.
 
-Cron (e.g. every 30 minutes):
+### Loader schedule
 
-```
-*/30 * * * * cd /path/to/api && uv run python -m ingestion.run schemes
-```
+**Changed 2026-10-19:** dev never had a cron job, so nothing loaded new files after the manual runs.
+The API now runs the loader itself (`app/scheduler.py`), so a deployed API keeps its data up to date
+with no cron job to set up:
 
-The cron job only keeps the database in sync with GCS; clients are always served from the
+- Once a day at `LOADER_DAILY_AT` (`09:00`, in `TIMEZONE`, India time) it runs
+  `python -m ingestion.run schemes` for the current month in a child process, so a slow or failing
+  load never affects API requests. SAP's files land around 04:30–05:00, so 09:00 picks up the whole
+  day. On days 1 to `LOADER_CATCH_UP_DAYS` (3) of a month it also loads the previous month (files of
+  its last day).
+- With several workers or servers on one database, only one runs the load (Postgres advisory lock);
+  if that worker dies, another takes over the next day.
+- A failed run (GCS or database down, bad file, longer than `LOADER_TIMEOUT_MINUTES` = 120) is logged
+  at ERROR and tried again up to `LOADER_RETRIES` (3) times, `LOADER_RETRY_MINUTES` (30) apart; files
+  already loaded are skipped. If every try fails, the log says so and the next try is the next day
+  at 09:00 (or run `python -m ingestion.run schemes` by hand).
+- A restart does not trigger a load; the next one is at the next 09:00.
+- Every run shows in the API's log: `app.scheduler: Scheduled load of 2026-10 started/finished` and the
+  loader's own `ingestion:` lines.
+- On by default everywhere except `APP_ENV=local`; `LOADER_SCHEDULE_ENABLED=true|false` overrides. To
+  run the loader from cron instead, set it to `false` and use e.g.
+  `0 9 * * * cd /path/to/api && APP_ENV=<env> uv run python -m ingestion.run schemes` (server clock in IST).
+- The API needs the loader's settings (GCS key, `GCS_BUCKET`, `SCHEME_PREFIX_TEMPLATE`) as well as
+  its own.
+
+The loader only keeps the database in sync with GCS; clients are always served from the
 database. Each `schemes` run:
 
 1. Lists the files in this month's GCS folder, e.g. `gs://acme-scheme-files/sap-exports/2026/10/`
@@ -330,7 +354,7 @@ How it loads quickly (a month has ~530 files of ~15 MB):
   row bad instead of being stored.
 - `TIMEZONE` (default `Asia/Kolkata`) decides the current month when `--year`/`--month` are not given.
 - Only one run at a time: a run that finds another still going (e.g. a long backfill when the next
-  cron run starts) logs a warning and stops.
+  scheduled run starts) logs a warning and stops.
 - `--limit N` loads only the first N new files (for testing); each file's log line shows its read
   and save time.
 
@@ -358,7 +382,7 @@ version later; today they match `main`.
 For DevOps, per environment:
 
 1. Create `.env.<env>` from `.env.example` (or load the values into the platform's secret manager /
-   environment variables), set `APP_ENV=<env>` for the API and the cron job, and fill in the values
+   environment variables), set `APP_ENV=<env>` for the API, and fill in the values
    marked `[dev/uat/prod]`.
 2. Auth (see *Authentication* above), separately per environment, never reused:
    - one client per caller: `uv run python -m app.security new-client partner` (and e.g. `qa`). Give
@@ -376,8 +400,10 @@ For DevOps, per environment:
    `/docs` should return 200 on dev/UAT and `/docs` and `/openapi.json` 404 on prod. The page loads
    one pinned Swagger UI release (`app/docs.py`) from `cdn.jsdelivr.net` with integrity hashes, so the
    browser refuses the files if the CDN ever serves different ones.
-5. Give the cron job the same settings as the API (database, GCS and, for the cache,
-   `CACHE_ENABLED` and `REDIS_URL`).
+5. The API runs the loader itself (*Loader schedule*), so it also needs the GCS settings: the key
+   file at `GOOGLE_APPLICATION_CREDENTIALS` must exist on the server. No cron job is needed. After a
+   deploy, the log shows `Loader schedule on: daily at 09:00 Asia/Kolkata` at start-up and
+   `Scheduled load of <year>-<month> finished` after 09:00 each day.
 6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`. Each loader run
    also adds tables or indexes from newer releases (e.g. API 1's dealer index), so no extra step after
    an upgrade, but run `init-db` once right after deploying one so the API is fast before the next load.

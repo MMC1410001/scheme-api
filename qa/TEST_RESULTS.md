@@ -12,6 +12,35 @@
 
 ## Summary
 
+### One row per component and start date — 2026-10-16 (local + dev data)
+
+Found on dev: dealer `6100000005`, September 2026, returned EB SLAB 2 twice: 01–18 Sep (SAP update
+24/09, file `sap-exports/2026/09/main_20260926_030001_024.csv`) and its correction 01–19 Sep (update
+26/09, file `main_20260929_030040_024.csv`), same agreement and suffix. A second pattern: 325 dealers
+in September and 1,712 in October had all their components twice, under two agreement numbers with the
+same dates and figures (scheme re-issued under a new agreement).
+
+Rule (user's decision): API 1 returns one row per component and start date (Valid From), the newest
+"Last Updated" (then the newer folder, then the higher agreement). Older versions stay in the
+database. API change only (`app/repository.py`); no schema change and no reload needed.
+
+Checked read-only against the dev database with the new query: `6100000005` Sept returns one EB SLAB 2
+(01–19 Sep); 300 random dealers each for Sep and Oct 2026 have no component twice for the same start
+date (was: 7,997 dealers in Sept with a corrected end date, plus the 325 / 1,712 re-issued dealers).
+
+| Suite | Total | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| pytest (unit + database tests, `TEST_DATABASE_URL` set; 6 new month-rule tests) | 360 | 360 | 0 | 0 |
+| Postman — API 1 collection (65 requests) — assertions (newman; new "each component once" check) | 309 | 309 | 0 | 0 |
+| Playwright — API 1 + common (API1_TC_14 renamed: newest SAP update only) | 100 | 97 | 0 | 3 |
+| k6 smoke (30 s, 1 user) | 61 requests | 100% checks | 0% failed | p95 12 ms |
+| Security: bandit (5 low "hardcoded password" false positives, same as before this change), pip-audit (none), OWASP ZAP | — | FAIL-NEW 0 | — | WARN-NEW 2 |
+
+The 2 ZAP warnings do not come from this change: 10105 "Weak Authentication Method" is the token
+endpoint taking credentials over plain HTTP on the local run (dev is HTTPS), and 10023 "Debug Error
+Messages" matches the error example text in `/openapi.json`. The last recorded ZAP run (2026-10-14)
+predates the token endpoint.
+
 ### Components VALUE % and VALUE FA added — 2026-10-16 (local)
 
 API 1 now serves 10 components: `VALUE %` and `VALUE FA` (Qualification from GSR (Q), like `VALUE`;
@@ -54,7 +83,7 @@ Postman requests.
 |---|---|---|---|---|
 | QA-1 | Medium | A made-up `X-Forwarded-For` got a fresh token rate limit (429 → 200): uvicorn trusts `X-Forwarded-For` from 127.0.0.1 by default and rewrote the client IP before the app saw it. Behind a proxy that uvicorn doesn't trust, the opposite happens: every caller shares one count. | **Fixed:** `TRUSTED_PROXIES` setting; the app picks the right-most untrusted `X-Forwarded-For` entry itself (`app/ratelimit.py` `client_ip`); `python -m app` starts uvicorn with its proxy handling off. Re-test: spoofed header → 429. **DevOps:** start with `python -m app`, set `TRUSTED_PROXIES`. | `test_ratelimit.py` (client_ip cases, spoofing, launcher), `test_config.py`, COMMON_TC_19_SEC |
 | QA-2 | Medium | If both `…/2026/01/` and `…/2026/1/` exist, the loader read only the first and skipped the other without a log line. | **Fixed:** every candidate folder is read (de-duplicated by path). | `test_run.py::test_both_month_folders_are_loaded_when_both_exist` |
-| QA-3 | — | A corrected validity period leaves the old period's row, so API 1 returns both. | **By design** (business rule: every stored period overlapping the month is returned). No change. | — |
+| QA-3 | — | A corrected validity period leaves the old period's row, so API 1 returns both. | **Fixed 2026-10-16** (rule changed after dev showed it, see the top section): API 1 returns one row per component and start date, the newest SAP update. | API1_TC_14, `tests/test_month_query_db.py` |
 | QA-4 | Medium | `NaN` / `Infinity` amounts were stored and served as `null` with no warning. | **Fixed:** they make the row bad (counted, logged, file marked failed). | `test_schemes.py` (10 values + a row) |
 | QA-5 | Medium | A file that can't be read at all (not UTF-8, missing columns) was never recorded: every cron run downloaded it again, failed again and exited 1. | **Fixed:** read once more, then recorded as `failed` with no rows (not retried until re-upload or `--reload`). A download error is still retried next run. | `test_run.py` (5 unreadable kinds, re-read + record, download error), `test_load_db.py` |
 | QA-6 | Medium | Dates written `DD MM YYYY` (spaces) are rejected. | **Skipped** (decision 2026-10-16). | — |
