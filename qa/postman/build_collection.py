@@ -14,6 +14,9 @@ OUT = Path(__file__).resolve().parent
 API1 = "{{baseUrl}}/v1/schemes/current-month"
 COMPONENTS = ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "VALUE", "VALUE %", "VALUE FA", "LUXURY", "PREMIUM 01", "PREMIUM 02",
               "EB FULL MONTH"]
+# Qualification rule (2026-10-22): these qualify on GSR, every other component on invoiced quantity.
+GSR_COMPONENTS = ["EB SLAB 1", "EB SLAB 2", "EB SLAB 3", "EB FULL MONTH", "VALUE", "VALUE %", "VALUE FA", "ROLLER",
+                  "SANDPAPER", "MASKING TAPE"]
 
 def script(lines):
     return [{"listen": "test", "script": {"type": "text/javascript", "exec": lines}}]
@@ -82,12 +85,14 @@ ROW_CHECKS = [
     'pm.test("Dealer has rows (needs sample data loaded)", () => pm.expect(rows.length).to.be.above(0));',
     'const FIELDS = ["Customer","FromDate","ToDate","ComponentDescription","Qualification","GsrB","RebateRate","ClearCut","ShortfallAmount","ShortfallPct","NextSlabRate"];',
     f'const COMPONENTS = {json.dumps(COMPONENTS)};',
-    'pm.test("Every row has exactly the template fields", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(FIELDS)));',
-    'pm.test("Only the 10 template components are returned", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));',
+    'pm.test("Rows of the 10 have exactly the template fields; other components add QualificationBasis and InvoicedQty", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(COMPONENTS.includes(r.ComponentDescription) ? FIELDS : FIELDS.concat(["QualificationBasis", "InvoicedQty"]))));',
+    f'const GSR_COMPONENTS = {json.dumps(GSR_COMPONENTS)};',
+    'pm.test("Components outside the 10: QualificationBasis GSR for ROLLER, SANDPAPER, MASKING TAPE, else INVOICE_QTY with Qualification = InvoicedQty", () => rows.filter(r => !COMPONENTS.includes(r.ComponentDescription)).forEach(r => { const gsr = GSR_COMPONENTS.includes(r.ComponentDescription); pm.expect(r.QualificationBasis).to.eql(gsr ? "GSR" : "INVOICE_QTY"); pm.expect(r.InvoicedQty === null || typeof r.InvoicedQty === "number").to.be.true; if (!gsr) pm.expect(r.Qualification).to.eql(r.InvoicedQty); }));',
     'pm.test("Customer matches the requested dealer", () => rows.forEach(r => pm.expect(r.Customer).to.eql(pm.collectionVariables.get("dealerCode") || pm.environment.get("dealerCode"))));',
     'pm.test("Dates are YYYY-MM-DD and FromDate <= ToDate", () => rows.forEach(r => { pm.expect(r.FromDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.ToDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.FromDate <= r.ToDate).to.be.true; }));',
     'pm.test("Amounts are numbers (or null)", () => rows.forEach(r => ["Qualification","GsrB","RebateRate","ClearCut","ShortfallAmount","ShortfallPct","NextSlabRate"].forEach(k => pm.expect(r[k] === null || typeof r[k] === "number").to.be.true)));',
-    'pm.test("Rows are ordered by ToDate, then template order", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i]; pm.expect(a.ToDate < b.ToDate || (a.ToDate === b.ToDate && COMPONENTS.indexOf(a.ComponentDescription) <= COMPONENTS.indexOf(b.ComponentDescription))).to.be.true; } });',
+    'const rank = n => COMPONENTS.includes(n) ? [COMPONENTS.indexOf(n), ""] : [COMPONENTS.length, n];',
+    'pm.test("Rows are ordered by ClearCut highest first (empty last); equal ClearCut by ToDate, template order, then name", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i], ra = rank(a.ComponentDescription), rb = rank(b.ComponentDescription); const tie = a.ToDate < b.ToDate || (a.ToDate === b.ToDate && (ra[0] < rb[0] || (ra[0] === rb[0] && ra[1] <= rb[1]))); pm.expect(a.ClearCut === b.ClearCut ? tie : (b.ClearCut === null || (a.ClearCut !== null && a.ClearCut > b.ClearCut))).to.be.true; } });',
     'const y = Number(pm.variables.get("year")), m = Number(pm.variables.get("month"));',
     'const monthStart = y + "-" + String(m).padStart(2, "0") + "-01", monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);',
     'pm.test("Every row is valid in the requested month (validity overlaps it)", () => rows.forEach(r => pm.expect(r.FromDate <= monthEnd && r.ToDate >= monthStart).to.be.true));',
@@ -96,18 +101,18 @@ ROW_CHECKS = [
 ]
 
 SAMPLE_ROWS = [
-    {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-11", "ComponentDescription": "EB SLAB 1", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.0},
     {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "LUXURY", "Qualification": 315.1, "GsrB": 159292.8, "RebateRate": 1.0, "ClearCut": 1592.93, "ShortfallAmount": 84.9, "ShortfallPct": 21.23, "NextSlabRate": 1.5},
+    {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-11", "ComponentDescription": "EB SLAB 1", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.0},
 ]
 
 health = req("Health check", "GET", "{{baseUrl}}/health", auth=NO_AUTH,
-    description="Liveness check. No token needed.",
+    description="Health check: the API is up and its database answers (503 when it does not). No token needed.",
     tests=[status(200), 'pm.test("Body is {ok: true}", () => pm.expect(pm.response.json()).to.eql({ok: true}));'])
 
 SAME_COUNT = 'pm.test("Same row count as the first request", () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get("api1RowCount"))));'
 api1 = [
     req("Monthly schemes - dealer code as string", "POST", API1, {"dealer_code": "{{dealerCode}}", **MONTH_VARS}, ROW_CHECKS,
-        description=("Returns the dealer's rows for the 10 template components in the given month, ordered by end date. "
+        description=("Returns the dealer's rows for every component in the given month, ordered by ClearCut, highest first. "
                      "`month` and `year` default to the current month (India time) unless the environment sets them."),
         examples=[example("200 - rows for a dealer", "OK", 200, SAMPLE_ROWS, {"dealer_code": "6100000001", "month": 10, "year": 2026}),
                   example("200 - dealer with no data that month", "OK", 200, [], {"dealer_code": "6199999999", "month": 10, "year": 2026})]),

@@ -60,9 +60,13 @@ class SchemeRow(BaseModel):
     customer: str
     from_date: date | None
     to_date: date | None
-    component_description: str = Field(examples=["EB SLAB 1"])
+    component_description: str = Field(
+        examples=["EB SLAB 1"],
+        description="SAP Comp desc: the 10 template components first, then any other component SAP sends",
+    )
     qualification: float | None = Field(
-        description="GSR for EB and Value (GSR (Q); for EB FULL MONTH, GSR (B)); invoiced quantity (Q) for Luxury and Premium"
+        description="GSR (Q) for EB, Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE (for "
+        "EB FULL MONTH, GSR (B)); invoiced quantity (Q) for every other component"
     )
     gsr_b: float | None
     rebate_rate: float | None
@@ -70,6 +74,23 @@ class SchemeRow(BaseModel):
     shortfall_amount: float | None
     shortfall_pct: float | None
     next_slab_rate: float | None = Field(description="Rebate rate of the next slab (SAP Next Slab Rate)")
+    # Only on rows of components outside the 10 template ones (left out of the others).
+    qualification_basis: str | None = Field(
+        default=None,
+        description="Only for components outside the 10 template ones: what Qualification holds, GSR (GSR (Q); "
+        "ROLLER, SANDPAPER, MASKING TAPE) or INVOICE_QTY (invoiced quantity (Q); the others). Not sent for the 10.",
+        examples=["INVOICE_QTY"],
+    )
+    invoiced_qty: float | None = Field(
+        default=None,
+        description="Only for components outside the 10 template ones: SAP Invoiced Quantity (Q) (equal to "
+        "Qualification when QualificationBasis is INVOICE_QTY). Not sent for the 10.",
+        examples=[50.0],
+    )
+
+
+# SchemeRow fields sent only on rows of components outside the 10 template ones.
+OTHER_COMPONENT_FIELDS = {"qualification_basis", "invoiced_qty"}
 
 
 class TokenResponse(BaseModel):

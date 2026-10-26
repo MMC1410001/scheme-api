@@ -102,7 +102,7 @@
                 "health"
               ]
             },
-            "description": "Liveness check. No token needed.",
+            "description": "Health check: the API is up and its database answers (503 when it does not). No token needed.",
             "auth": {
               "type": "noauth"
             }
@@ -146,7 +146,7 @@
                 "current-month"
               ]
             },
-            "description": "Returns the dealer's rows for the 10 template components in the given month, ordered by end date. `month` and `year` default to the current month (India time) unless the environment sets them.",
+            "description": "Returns the dealer's rows for every component in the given month, ordered by ClearCut, highest first. `month` and `year` default to the current month (India time) unless the environment sets them.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"dealer_code\": \"{{dealerCode}}\",\n  \"month\": {{month}},\n  \"year\": {{year}}\n}",
@@ -169,13 +169,14 @@
                   "pm.test(\"Dealer has rows (needs sample data loaded)\", () => pm.expect(rows.length).to.be.above(0));",
                   "const FIELDS = [\"Customer\",\"FromDate\",\"ToDate\",\"ComponentDescription\",\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\",\"NextSlabRate\"];",
                   "const COMPONENTS = [\"EB SLAB 1\", \"EB SLAB 2\", \"EB SLAB 3\", \"VALUE\", \"VALUE %\", \"VALUE FA\", \"LUXURY\", \"PREMIUM 01\", \"PREMIUM 02\", \"EB FULL MONTH\"];",
-                  "pm.test(\"Every row has exactly the template fields\", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(FIELDS)));",
-                  "pm.test(\"Only the 10 template components are returned\", () => rows.forEach(r => pm.expect(COMPONENTS).to.include(r.ComponentDescription)));",
-                  "pm.test(\"Each component appears once (newest SAP update only)\", () => { const names = rows.map(r => r.ComponentDescription); pm.expect(new Set(names).size).to.eql(names.length); });",
+                  "pm.test(\"Rows of the 10 have exactly the template fields; other components add QualificationBasis and InvoicedQty\", () => rows.forEach(r => pm.expect(Object.keys(r)).to.have.members(COMPONENTS.includes(r.ComponentDescription) ? FIELDS : FIELDS.concat([\"QualificationBasis\", \"InvoicedQty\"]))));",
+                  "const GSR_COMPONENTS = [\"EB SLAB 1\", \"EB SLAB 2\", \"EB SLAB 3\", \"EB FULL MONTH\", \"VALUE\", \"VALUE %\", \"VALUE FA\", \"ROLLER\", \"SANDPAPER\", \"MASKING TAPE\"];",
+                  "pm.test(\"Components outside the 10: QualificationBasis GSR for ROLLER, SANDPAPER, MASKING TAPE, else INVOICE_QTY with Qualification = InvoicedQty\", () => rows.filter(r => !COMPONENTS.includes(r.ComponentDescription)).forEach(r => { const gsr = GSR_COMPONENTS.includes(r.ComponentDescription); pm.expect(r.QualificationBasis).to.eql(gsr ? \"GSR\" : \"INVOICE_QTY\"); pm.expect(r.InvoicedQty === null || typeof r.InvoicedQty === \"number\").to.be.true; if (!gsr) pm.expect(r.Qualification).to.eql(r.InvoicedQty); }));",
                   "pm.test(\"Customer matches the requested dealer\", () => rows.forEach(r => pm.expect(r.Customer).to.eql(pm.collectionVariables.get(\"dealerCode\") || pm.environment.get(\"dealerCode\"))));",
                   "pm.test(\"Dates are YYYY-MM-DD and FromDate <= ToDate\", () => rows.forEach(r => { pm.expect(r.FromDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.ToDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/); pm.expect(r.FromDate <= r.ToDate).to.be.true; }));",
                   "pm.test(\"Amounts are numbers (or null)\", () => rows.forEach(r => [\"Qualification\",\"GsrB\",\"RebateRate\",\"ClearCut\",\"ShortfallAmount\",\"ShortfallPct\",\"NextSlabRate\"].forEach(k => pm.expect(r[k] === null || typeof r[k] === \"number\").to.be.true)));",
-                  "pm.test(\"Rows are ordered by ToDate, then template order\", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i]; pm.expect(a.ToDate < b.ToDate || (a.ToDate === b.ToDate && COMPONENTS.indexOf(a.ComponentDescription) <= COMPONENTS.indexOf(b.ComponentDescription))).to.be.true; } });",
+                  "const rank = n => COMPONENTS.includes(n) ? [COMPONENTS.indexOf(n), \"\"] : [COMPONENTS.length, n];",
+                  "pm.test(\"Rows are ordered by ClearCut highest first (empty last); equal ClearCut by ToDate, template order, then name\", () => { for (let i = 1; i < rows.length; i++) { const a = rows[i-1], b = rows[i], ra = rank(a.ComponentDescription), rb = rank(b.ComponentDescription); const tie = a.ToDate < b.ToDate || (a.ToDate === b.ToDate && (ra[0] < rb[0] || (ra[0] === rb[0] && ra[1] <= rb[1]))); pm.expect(a.ClearCut === b.ClearCut ? tie : (b.ClearCut === null || (a.ClearCut !== null && a.ClearCut > b.ClearCut))).to.be.true; } });",
                   "const y = Number(pm.variables.get(\"year\")), m = Number(pm.variables.get(\"month\"));",
                   "const monthStart = y + \"-\" + String(m).padStart(2, \"0\") + \"-01\", monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);",
                   "pm.test(\"Every row is valid in the requested month (validity overlaps it)\", () => rows.forEach(r => pm.expect(r.FromDate <= monthEnd && r.ToDate >= monthStart).to.be.true));",
@@ -226,7 +227,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "[\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-11\",\n    \"ComponentDescription\": \"EB SLAB 1\",\n    \"Qualification\": 405232.86,\n    \"GsrB\": 405232.86,\n    \"RebateRate\": 0.75,\n    \"ClearCut\": 0.0,\n    \"ShortfallAmount\": 0.0,\n    \"ShortfallPct\": 0.0,\n    \"NextSlabRate\": 1.0\n  },\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-31\",\n    \"ComponentDescription\": \"LUXURY\",\n    \"Qualification\": 315.1,\n    \"GsrB\": 159292.8,\n    \"RebateRate\": 1.0,\n    \"ClearCut\": 1592.93,\n    \"ShortfallAmount\": 84.9,\n    \"ShortfallPct\": 21.23,\n    \"NextSlabRate\": 1.5\n  }\n]"
+              "body": "[\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-31\",\n    \"ComponentDescription\": \"LUXURY\",\n    \"Qualification\": 315.1,\n    \"GsrB\": 159292.8,\n    \"RebateRate\": 1.0,\n    \"ClearCut\": 1592.93,\n    \"ShortfallAmount\": 84.9,\n    \"ShortfallPct\": 21.23,\n    \"NextSlabRate\": 1.5\n  },\n  {\n    \"Customer\": \"6100000001\",\n    \"FromDate\": \"2026-10-01\",\n    \"ToDate\": \"2026-10-11\",\n    \"ComponentDescription\": \"EB SLAB 1\",\n    \"Qualification\": 405232.86,\n    \"GsrB\": 405232.86,\n    \"RebateRate\": 0.75,\n    \"ClearCut\": 0.0,\n    \"ShortfallAmount\": 0.0,\n    \"ShortfallPct\": 0.0,\n    \"NextSlabRate\": 1.0\n  }\n]"
             },
             {
               "name": "200 - dealer with no data that month",
@@ -2334,7 +2335,7 @@
               "bearer": [
                 {
                   "key": "token",
-                  "value": "kéy",
+                  "value": "k\u00e9y",
                   "type": "string"
                 }
               ]

@@ -86,9 +86,16 @@ def _gcs_client():
     from google.cloud import storage
 
     if not hasattr(_clients, "client"):
-        # Reading a bucket doesn't need a project, but the client insists on one; "<none>" is what the
-        # library itself uses for anonymous clients. Set GCS_PROJECT to bill or audit against a project.
-        _clients.client = storage.Client(project=get_settings().gcs_project or "<none>")
+        settings = get_settings()
+        if info := settings.gcs_credentials_info:
+            # The key from GCS_CREDENTIALS_JSON; the project defaults to the key's own project.
+            project = {"project": settings.gcs_project} if settings.gcs_project else {}
+            _clients.client = storage.Client.from_service_account_info(info, **project)
+        else:
+            # The library finds the key file (GOOGLE_APPLICATION_CREDENTIALS) or the server's service account.
+            # Reading a bucket doesn't need a project, but the client insists on one; "<none>" is what the
+            # library itself uses for anonymous clients. Set GCS_PROJECT to bill or audit against a project.
+            _clients.client = storage.Client(project=settings.gcs_project or "<none>")
     return _clients.client
 
 

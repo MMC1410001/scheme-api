@@ -3,19 +3,19 @@
 Scheme data for the client team.
 
 SAP scheme files land in GCS every day (one folder per month). The API itself runs the loader
-once a day at 09:00 India time (no separate cron job to set up), which loads them into Postgres, and the API reads
+once a day at 05:00 India time (no separate cron job to set up), which loads them into Postgres, and the API reads
 from Postgres.
 
 ```
 GCS (daily SAP scheme files)
-   │   daily 09:00 IST, started by the API: python -m ingestion.run schemes
+   │   daily 05:00 IST, started by the API: python -m ingestion.run schemes
    ▼
 Postgres ──► FastAPI ──► the client
 ```
 
 | API | Endpoint | Body | Returns |
 |---|---|---|---|
-| 1 | `POST /v1/schemes/current-month` | `{"dealer_code": "6100000001", "month": 10, "year": 2026}` | The dealer's rows for the 10 template components in that month, in template order |
+| 1 | `POST /v1/schemes/current-month` | `{"dealer_code": "6100000001", "month": 10, "year": 2026}` | The dealer's rows for every component in that month, by `ClearCut`, highest first |
 
 API 1 returns a JSON list (empty when there's no data). Every call needs `Authorization: Bearer <token>`,
 with a 1-hour token from `POST /v1/auth/token` (OAuth2 client credentials; see *Authentication*).
@@ -169,6 +169,7 @@ Next time, `docker start acme-db` and continue from Step 4
 | `401 invalid_client` from `/v1/auth/token` | Wrong client_id or secret: locally `local-client` / `local-test-secret` |
 | API won't start: `APP_ENV is not set and there are no auth settings` | Locally without auth, start with `APP_ENV=local uv run python -m app`; otherwise set `AUTH_CLIENTS` and `JWT_SECRET` |
 | API won't start: `Auth settings invalid for APP_ENV=...` | Fix the listed `AUTH_CLIENTS` / `JWT_SECRET` problems (outside `local` the example values from `.env.example` are refused). `APP_ENV=(not set)`: locally, start with `APP_ENV=local` |
+| Log says `Loader schedule off (APP_ENV=(not set), ...)` on a server; no new files load | The server doesn't set `APP_ENV`, so the API treats it as `local`: set `APP_ENV=dev`/`uat`/`prod` in the container's environment (or `LOADER_SCHEDULE_ENABLED=true`) and restart |
 | API returns `[]` | No data for that dealer in that month (the sample data is for the current month): re-run Step 5, use dealer `6100000001` |
 | `422` from API 1 | `month` (1–12) and `year` (2000–2100) are required along with `dealer_code` |
 | `uv: command not found` | Close and reopen the terminal after installing uv |
@@ -219,13 +220,13 @@ up to 50,000 rows per file, several files a day).
   (1–15 Oct, 12 lakh), so 2 lakh were added, not 22. Each row is returned as SAP sends it and rows are
   never added together; a newer update of the same row replaces it.
 - **Month:** the caller sends `month` and `year` with the dealer code; API 1 returns that month's
-  rows. The database keeps every month
-  (year + month are part of the key). The cron job loads the current month (India time); load an
-  earlier month once with `uv run python -m ingestion.run schemes --year <Y> --month <M>`.
+  rows. The database keeps the current month and the two before it (`LOADER_RETENTION_MONTHS`, 3);
+  older months return `[]`. The daily load takes the current month (India time); load an earlier
+  kept month once with `uv run python -m ingestion.run schemes --year <Y> --month <M>`.
 
 ## Run against GCS and the real database
 
-In the environment's settings file (see *Environments*): empty `LOCAL_DATA_DIR`, set `GCS_BUCKET`, `GOOGLE_APPLICATION_CREDENTIALS`,
+In the environment's settings file (see *Environments*): empty `LOCAL_DATA_DIR`, set `GCS_BUCKET`, `GOOGLE_APPLICATION_CREDENTIALS` (or `GCS_CREDENTIALS_JSON`),
 `DATABASE_URL`, and the scheme prefix (`SCHEME_PREFIX_TEMPLATE`). On a laptop,
 `gcloud auth application-default login` can replace the key file; `GCS_PROJECT` is optional.
 The Dev database is reachable only over the team VPN. Then create the
@@ -295,23 +296,34 @@ valid, and it refuses the local example values from `.env.example`, also when `A
 The API now runs the loader itself (`app/scheduler.py`), so a deployed API keeps its data up to date
 with no cron job to set up:
 
-- Once a day at `LOADER_DAILY_AT` (`09:00`, in `TIMEZONE`, India time) it runs
+- Once a day at `LOADER_DAILY_AT` (`05:00`, in `TIMEZONE`, India time) it runs
   `python -m ingestion.run schemes` for the current month in a child process, so a slow or failing
-  load never affects API requests. SAP's files land around 04:30–05:00, so 09:00 picks up the whole
-  day. On days 1 to `LOADER_CATCH_UP_DAYS` (3) of a month it also loads the previous month (files of
+  load never affects API requests. SAP's files land around 04:30–04:51, so 05:00 picks up the whole
+  day, with about 10 minutes to spare: files that land after 05:00 wait for the next day's run. On days 1 to `LOADER_CATCH_UP_DAYS` (3) of a month it also loads the previous month (files of
   its last day).
+- The database keeps one row per dealer, component and start date (SAP's newest version; older
+  versions are deleted as files load) and only the current month and the two before it
+  (`LOADER_RETENTION_MONTHS`, 3): schemes that ended earlier are deleted at the end of each run.
 - With several workers or servers on one database, only one runs the load (Postgres advisory lock);
   if that worker dies, another takes over the next day.
 - A failed run (GCS or database down, bad file, longer than `LOADER_TIMEOUT_MINUTES` = 120) is logged
   at ERROR and tried again up to `LOADER_RETRIES` (3) times, `LOADER_RETRY_MINUTES` (30) apart; files
   already loaded are skipped. If every try fails, the log says so and the next try is the next day
-  at 09:00 (or run `python -m ingestion.run schemes` by hand).
-- A restart does not trigger a load; the next one is at the next 09:00.
+  at 05:00 (or run `python -m ingestion.run schemes` by hand).
+- A restart does not trigger a load; the next one is at the next 05:00.
 - Every run shows in the API's log: `app.scheduler: Scheduled load of 2026-10 started/finished` and the
   loader's own `ingestion:` lines.
+- The log goes to the console (the container's output, collected by Loki). With
+  `LOG_FILE=/var/log/scheme-api/scheme-api.log` the same lines also go to one file per day,
+  e.g. `scheme-api-2026-10-23.log` (days in `TIMEZONE`, each line with date, time and `+05:30`), and
+  files older than `LOG_FILE_KEEP_DAYS` (14) are deleted. On a server, mount that folder from the host
+  so the files survive a redeploy. A folder the API can't write is logged as a warning; the API still
+  starts.
+- At start-up the log says `Loader schedule on: daily at 05:00 Asia/Kolkata`, or
+  `Loader schedule off (APP_ENV=..., LOADER_SCHEDULE_ENABLED=...)` with the reason.
 - On by default everywhere except `APP_ENV=local`; `LOADER_SCHEDULE_ENABLED=true|false` overrides. To
   run the loader from cron instead, set it to `false` and use e.g.
-  `0 9 * * * cd /path/to/api && APP_ENV=<env> uv run python -m ingestion.run schemes` (server clock in IST).
+  `0 5 * * * cd /path/to/api && APP_ENV=<env> uv run python -m ingestion.run schemes` (server clock in IST).
 - The API needs the loader's settings (GCS key, `GCS_BUCKET`, `SCHEME_PREFIX_TEMPLATE`) as well as
   its own.
 
@@ -394,19 +406,26 @@ For DevOps, per environment:
    the next deploy, or the API will not start. Their `API_KEY` lines are no longer used and can be
    removed. Secrets must never be committed.
 3. `GOOGLE_APPLICATION_CREDENTIALS`: path to the GCS service-account key mounted on the server
-   (or run as a service account that can read the bucket).
+   (or run as a service account that can read the bucket). Without a mounted file: put the key itself
+   in `GCS_CREDENTIALS_JSON`, as base64 on one line (`base64 -w0 key.json`; macOS `base64 -i key.json`).
+   It wins over `GOOGLE_APPLICATION_CREDENTIALS`, and a bad value stops the API at start-up.
+   Dev uses service account `scheme-loader@example-project.iam.gserviceaccount.com` (project
+   `example-project`), which can read `acme-scheme-files`; its key is in `.env.dev` as `GCS_CREDENTIALS_JSON`.
 4. `DOCS_ENABLED`: `true` for dev and UAT, `false` for prod (the template defaults to `true`, so
    set it explicitly there). Swagger UI is served by the API itself at `/docs`; after deploying,
    `/docs` should return 200 on dev/UAT and `/docs` and `/openapi.json` 404 on prod. The page loads
    one pinned Swagger UI release (`app/docs.py`) from `cdn.jsdelivr.net` with integrity hashes, so the
    browser refuses the files if the CDN ever serves different ones.
 5. The API runs the loader itself (*Loader schedule*), so it also needs the GCS settings: the key
-   file at `GOOGLE_APPLICATION_CREDENTIALS` must exist on the server. No cron job is needed. After a
-   deploy, the log shows `Loader schedule on: daily at 09:00 Asia/Kolkata` at start-up and
-   `Scheduled load of <year>-<month> finished` after 09:00 each day.
+   file at `GOOGLE_APPLICATION_CREDENTIALS` must exist on the server (or the key is in `GCS_CREDENTIALS_JSON`). No cron job is needed. After a
+   deploy, the log shows `Loader schedule on: daily at 05:00 Asia/Kolkata` at start-up and
+   `Scheduled load of <year>-<month> finished` after 05:00 each day.
 6. Create the tables once: `APP_ENV=<env> uv run python -m ingestion.run init-db`. Each loader run
    also adds tables or indexes from newer releases (e.g. API 1's dealer index), so no extra step after
    an upgrade, but run `init-db` once right after deploying one so the API is fast before the next load.
+   After the first daily load of a release that deletes or rewrites many rows (e.g. 0.12), run
+   `APP_ENV=<env> uv run python -m ingestion.run compact` at a quiet time to give the space back to
+   the disk; it locks `scheme_records` while it runs (about 2.5 s per 200,000 rows).
 7. Rate limit: start the API with `python -m app` (above), set `TRUSTED_PROXIES` to the nginx / load
    balancer address(es) and make nginx append `X-Forwarded-For` (`$proxy_add_x_forwarded_for`); set
    `RATE_LIMIT_PER_SECOND` only to change the 2,500 default. **Changed 2026-10-16:** the old
@@ -415,6 +434,34 @@ For DevOps, per environment:
    new API. It adds the `next_slab_rate` column and fills it for rows already loaded (from each
    row's stored SAP data); the new API fails with 500 until the column exists. Cached responses
    use a new key prefix, so no old body without `NextSlabRate` is served.
+
+## Which components API 1 returns
+
+The loader stores **every** component SAP sends (about 100 a month; SAP renames and adds schemes from
+month to month), so a new or renamed component is in the database without a code change. Rows with
+an empty "Comp desc" are skipped. API 1 returns every component, ordered by `ClearCut`, highest
+first (an empty `ClearCut` last). Rows with the same `ClearCut` (most are 0) keep the template order:
+by end date, then the 10 template ones in template order, then the rest by name.
+
+- `Qualification` (rule of 2026-10-22): GSR (Q) for EB (EB SLAB 1-3; EB FULL MONTH takes GSR (B)),
+  Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE; invoiced quantity (Q) for
+  every other component (LUXURY, PREMIUM 01/02 and the rest). Names match SAP's "Comp desc" exactly,
+  so look-alikes such as `ALWD EB2`, `EB ADD FA 02` or `ALWD VALUE SCH` are on invoiced quantity.
+  The list is `GSR_COMPONENTS` in `app/constants.py`.
+- Rows of the 10 template components have no extra field. Rows of the other components also carry
+  `QualificationBasis` (`GSR` or `INVOICE_QTY`, what `Qualification` holds) and `InvoicedQty` (SAP's
+  Invoiced Quantity (Q)).
+- The loader stores `Qualification`. Rows stored before the 2026-10-22 rule are corrected once by the
+  next loader run (`loader_maintenance` 'qualification-rule-2026-10-22'), 2,000 dealers at a time
+  with a VACUUM after each batch, so the table does not grow; a stopped run carries on.
+
+(Every component returned since 2026-10-19; the `API_COMPONENTS` setting that switched between the 10
+and all is gone.)
+
+Files are recorded with the loader version that read them (`LOADER_VERSION` in `ingestion/load.py`).
+When a release raises it, the next run of a month reads that month's files again, without `--reload`.
+The daily schedule loads the current month (and the previous one on days 1-3), so it refreshes those
+by itself; for an older month run `python -m ingestion.run schemes --year Y --month M` once.
 
 ## Response cache (Redis)
 
@@ -457,10 +504,10 @@ qa/           Postman collection, Swagger spec and Playwright tests, k6, securit
 ## Open questions
 
 - [x] GCS path for the SAP exports: `acme-scheme-files/sap-exports/<year>/<month>/` (e.g. `.../2026/10`)
-- [ ] GCS access (service-account key)
+- [x] GCS access: service account `scheme-loader@example-project.iam.gserviceaccount.com` (key in `GCS_CREDENTIALS_JSON`)
 - [ ] Month folders for January–September: `01` or `1`? (the job tries `01`, then `1`)
 - [ ] The API template labels its date columns "To Date" then "From Date", but the values are
       from-date then to-date. The API returns `FromDate` = `Valid from` and `ToDate` = `To`.
-- [x] API 1: the client sends the month and year in the request (built)
-- [ ] Backfill: which earlier months must be loaded before go-live?
+- [x] API 1: The client sends the month and year in the request (built)
+- [ ] Backfill: which earlier months must be loaded before go-live? (only the 2 before the current one are kept)
 - [x] Auth: OAuth2 client credentials + JWT Bearer tokens (1 hour); required outside `local`, the API won't start without it.

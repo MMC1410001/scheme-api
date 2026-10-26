@@ -79,7 +79,7 @@ def test_other_methods_are_not_allowed(client, method):
 
 def test_unexpected_errors_return_a_generic_500(client):
     class BrokenRepository(FakeRepository):
-        def month_schemes(self, *args):
+        def month_schemes(self, *args, **kwargs):
             raise RuntimeError("connection to server at 10.0.0.5 failed")
 
     app.dependency_overrides[get_repository] = lambda: BrokenRepository()
@@ -109,7 +109,7 @@ def test_database_busy_returns_503_with_retry_after(client):
     from psycopg_pool import PoolTimeout
 
     class BusyRepository(FakeRepository):
-        def month_schemes(self, *args):
+        def month_schemes(self, *args, **kwargs):
             raise PoolTimeout("couldn't get a connection after 5.00 sec")
 
     app.dependency_overrides[get_repository] = lambda: BusyRepository()

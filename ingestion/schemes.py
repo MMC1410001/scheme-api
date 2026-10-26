@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.constants import COMPONENTS, QUALIFICATION_BASIS, QUALIFICATION_COLUMN
+from app.constants import qualification_basis, qualification_column
 from app.normalize import normalize_dealer_code
 
 # Our field -> flattened header name in the SAP export.
@@ -29,7 +29,6 @@ COLUMNS = {
 
 DATE_FORMATS = ("%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y")
 EMPTY_DATES = {"00/00/0000", "00.00.0000"}
-_COMPONENTS = set(COMPONENTS)
 
 
 def check_columns(headers: Iterable[str]) -> None:
@@ -41,13 +40,13 @@ def check_columns(headers: Iterable[str]) -> None:
 
 
 def to_record(row: dict[str, Any], year: int, month: int, source_file: str) -> dict[str, Any] | None:
-    """Convert one SAP row into a scheme_records row, or None for components we don't serve."""
+    """Convert one SAP row into a scheme_records row, or None for a row without a component."""
 
     def col(key: str) -> Any:
         return row.get(COLUMNS[key])
 
     component = _text(col("component"))
-    if component not in _COMPONENTS:
+    if not component:
         return None
 
     dealer_code = normalize_dealer_code(col("dealer_code"))
@@ -57,8 +56,8 @@ def to_record(row: dict[str, Any], year: int, month: int, source_file: str) -> d
     if not agreement or not deal_suffix:
         raise ValueError("missing agreement or deal suffix")
 
-    basis = QUALIFICATION_BASIS[component]
-    qualification = col(QUALIFICATION_COLUMN[component])
+    basis = qualification_basis(component)
+    qualification = col(qualification_column(component))
 
     return {
         "year": year,
@@ -77,6 +76,7 @@ def to_record(row: dict[str, Any], year: int, month: int, source_file: str) -> d
         "shortfall_amount": parse_number(col("shortfall_amount")),
         "shortfall_pct": parse_number(col("shortfall_pct")),
         "next_slab_rate": parse_number(col("next_slab_rate")),
+        "invoiced_qty": parse_number(col("invoiced_qty_q")),
         "last_updated_at": parse_last_updated(col("last_updated_date"), col("last_updated_time")),
         "source_file": source_file,
         "raw": to_jsonable(row),

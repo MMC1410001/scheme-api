@@ -73,7 +73,7 @@ box(ax, 22, 12, 19, 16, "Cloud Storage (GCS)\nSAP exports by\nyear / month folde
 box(ax, 48, 12, 19, 16, "Scheme API\n(this project)\nAPI 1: monthly schemes", "ours")
 box(ax, 83, 12, 15, 16, "Client team\nsystems / tools\ncall the APIs", "client")
 arrow(ax, (15.8, 20), (21.2, 20), "daily CSV\nexports", loff=(0, 0.8))
-arrow(ax, (41.8, 20), (47.2, 20), "daily load\n09:00 IST", loff=(0, 0.8))
+arrow(ax, (41.8, 20), (47.2, 20), "daily load\n05:00 IST", loff=(0, 0.8))
 arrow(ax, (67.8, 22.5), (82.2, 22.5), "dealer + month", loff=(0, 0.6))
 arrow(ax, (82.2, 17.5), (67.8, 17.5), "response: JSON rows", loff=(0, -4.2))
 ax.text(1, 4, "Grey: existing systems   Green: storage   Blue: built in this project   Orange: API consumer",
@@ -93,12 +93,12 @@ save(fig, "fig2_input_output")
 # Figure 3 — solution architecture
 fig, ax = canvas(10, 6.4)
 title(ax, "Figure 3 — Solution architecture")
-box(ax, 1, 46, 17, 10, "SAP / the client\nexport job", "ext")
+box(ax, 1, 46, 17, 10, "Client SAP\nexport job", "ext")
 box(ax, 24, 31, 20, 25, "GCS bucket\n\nsap-exports/YYYY/MM/\n  sap-exports_*.csv", "store", align="left")
-box(ax, 50, 38, 22, 18, "Ingestion job\ndaily 09:00 IST (by the API)\npython -m ingestion.run\n1 list new files\n2 parse + validate\n3 upsert newest rows", "ours", align="left")
+box(ax, 50, 38, 22, 18, "Ingestion job\ndaily 05:00 IST (by the API)\npython -m ingestion.run\n1 list new files\n2 parse + validate\n3 upsert newest rows", "ours", align="left")
 box(ax, 50, 4, 22, 27, "PostgreSQL\n\nscheme_records\n  (latest row per dealer,\n   agreement, suffix,\n   period)\ningested_files\n  (which files are loaded)", "store", align="left")
 box(ax, 78, 22, 21, 34, "FastAPI service\nuvicorn x 4 workers\n\nSecurity middleware\n  headers, 4 KB limit\nBearer JWT check\nRoutes /v1/auth/token,\n  /v1/schemes/...\nRepository\n  pooled, parameterised\n  SQL (pool -> 503)", "ours", align="left")
-box(ax, 78, 4, 21, 12, "the client systems\ntoken once an hour;\nPOST {dealer_code,\nmonth, year} <- rows", "client")
+box(ax, 78, 4, 21, 12, "Client systems\ntoken once an hour;\nPOST {dealer_code,\nmonth, year} <- rows", "client")
 arrow(ax, (18.8, 51), (23.2, 51))
 arrow(ax, (44.8, 47), (49.2, 47), "read", loff=(0, 0.6))
 arrow(ax, (61, 37.6), (61, 31.6), "upsert", lpos=0.5, loff=(4.5, -1.5))
@@ -111,12 +111,12 @@ save(fig, "fig3_architecture")
 fig, ax = canvas(10, 5.4)
 title(ax, "Figure 4 — Ingestion job: what happens to each file")
 steps = [
-    ("API starts\nthe loader\n(daily 09:00)", "ext"),
+    ("API starts\nthe loader\n(daily 05:00)", "ext"),
     ("List files in\nthis month's\nfolder", "ours"),
     ("Read CSV,\ncheck\ncolumns", "ours"),
-    ("One of the\n10 compo-\nnents?", "ours"),
+    ("Component\nname\ngiven?", "ours"),
     ("Parse dates\nand\nnumbers", "ours"),
-    ("Upsert if\nLast Updated\nis newer", "store"),
+    ("Upsert newest,\ndelete older\nversions", "store"),
     ("Mark file\nloaded,\nlog summary", "ours"),
 ]
 xs = [1, 15, 29, 43, 57, 71, 85]
@@ -128,21 +128,23 @@ for a, b in zip(xs, xs[1:]):
 outs = [
     (15, "Already\nloaded\n-> skip file", "note"),
     (29, "Column\nmissing ->\nfile fails", "warn"),
-    (43, "Other (e.g.\nALWD EB2)\n-> dropped", "note"),
+    (43, "Blank\ncomponent\n-> dropped", "note"),
     (57, "Bad value\n-> row\nskipped", "warn"),
-    (71, "Older update\n-> stored\nrow kept", "note"),
+    (71, "Older version\n(any agree-\nment) -> gone", "note"),
 ]
 for x, text, kind in outs:
-    box(ax, x, 5, W, 13, text, kind, size=7.8, bold_first=False)
-    arrow(ax, (x + W / 2, 27.4), (x + W / 2, 18.6), dashed=True)
-ax.text(1, 1, "Every skip, failure and drop is counted in the job's log summary; a failed file makes the job exit with code 1.", fontsize=7.8, color="#6B7280")
+    box(ax, x, 7.5, W, 13, text, kind, size=7.8, bold_first=False)
+    arrow(ax, (x + W / 2, 27.4), (x + W / 2, 21.1), dashed=True)
+ax.text(1, 1, "After the files: schemes that ended before the oldest kept month (LOADER_RETENTION_MONTHS = 3) are deleted.\n"
+        "Every skip, failure and drop is counted in the job's log summary; a failed file makes the job exit with code 1.",
+        fontsize=7.8, color="#6B7280")
 save(fig, "fig4_ingestion_flow")
 
 # Figure 5 — request lifecycle
 fig, ax = canvas(10, 5.0)
 title(ax, "Figure 5 — API request lifecycle and responses")
 chain = [
-    ("the client request\nPOST /v1/\nschemes/...", "client"),
+    ("Client request\nPOST /v1/\nschemes/...", "client"),
     ("Body\n<= 4 KB?", "ours"),
     ("Bearer token\nvalid?", "ours"),
     ("body valid?\n(dealer, month)", "ours"),
@@ -165,7 +167,9 @@ save(fig, "fig5_request_lifecycle")
 # Figure 6 — data model
 fig, ax = canvas(10, 5.4)
 title(ax, "Figure 6 — Data model (PostgreSQL)")
-box(ax, 1, 9, 38, 37, "scheme_records  (API 1)\n\nKEY year, month, dealer_code,\n     agreement, deal_suffix,\n     valid_from, valid_to\ncomponent  (one of 8)\nqualification_basis  (GSR | INVOICE_QTY)\nqualification, gsr_b, rebate_rate,\nclear_cut, shortfall_amount, shortfall_pct,\nnext_slab_rate\nlast_updated_at  (decides latest)\nsource_file, raw  (original row, JSONB)", "store", align="left", size=8.6)
-box(ax, 45, 24, 26, 22, "ingested_files\n\nid  PK\nkind  (scheme)\ngcs_path, generation\nsource_updated_at\nyear, month, row_count\nloaded_at\nstatus, rows_bad", "store", align="left", size=8.6)
-box(ax, 76, 19, 23, 27, "Why upsert?\n\nDaily files hold only the\nrows SAP changed that day.\nEach row is stored once\nand replaced only by a\nnewer \"Last Updated\"\nversion, so files can be\nloaded in any order.", "note", align="left", size=8.4)
+box(ax, 1, 9, 38, 37, "scheme_records  (API 1)\n\nKEY year, month, dealer_code,\n     agreement, deal_suffix, component,\n     valid_from, valid_to\n(component: any SAP name)\nqualification_basis  (GSR | INVOICE_QTY)\nqualification, gsr_b, rebate_rate,\nclear_cut, shortfall_amount, shortfall_pct,\nnext_slab_rate, invoiced_qty\nlast_updated_at  (decides latest)\nsource_file\nraw  (every SAP value, JSONB list)\nraw_layout -> raw_layouts", "store", align="left", size=8.6)
+box(ax, 45, 15, 26, 7.5, "loader_maintenance\nname PK, done_at", "store", align="left", size=8.4)
+box(ax, 45, 4, 26, 9, "raw_layouts\nid PK, columns (names once)\nview scheme_records_raw", "store", align="left", size=8.4)
+box(ax, 45, 25, 26, 21, "ingested_files\n\nid  PK\nkind  (scheme)\ngcs_path, generation\nsource_updated_at\nyear, month, row_count\nloaded_at\nstatus, rows_bad\nloader_version", "store", align="left", size=8.6)
+box(ax, 76, 9, 23, 37, "Why upsert?\n\nDaily files hold only the\nrows SAP changed that day.\nEach scheme (dealer,\ncomponent, start date) is\nstored once: its newest\n\"Last Updated\" version.\nOlder versions are\ndeleted, so files can be\nloaded in any order.\nSchemes that ended before\nthe 3 kept months are\ndeleted daily.", "note", align="left", size=8.4)
 save(fig, "fig6_data_model")

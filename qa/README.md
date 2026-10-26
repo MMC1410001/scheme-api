@@ -345,9 +345,9 @@ data is; override with `MONTH` / `YEAR`).
 | TC | Category | Description | Expected |
 |---|---|---|---|
 | API1_TC_1 | Functional | Dealer with data in the month | 200, non-empty array |
-| API1_TC_2 | Functional | Row fields | Exactly the 11 fields: the 10 template fields + `NextSlabRate` |
-| API1_TC_3 | Functional | Components | Only the 10 template components |
-| API1_TC_4 | Functional | Ordering | By ToDate, then template order |
+| API1_TC_2 | Functional | Row fields | Rows of the 10 components: exactly the 11 fields (the 10 template fields + `NextSlabRate`); other components add `QualificationBasis` and `InvoicedQty` |
+| API1_TC_3 | Functional | Components | Components outside the 10 carry `QualificationBasis` and `InvoicedQty` (number or null): `GSR` for ROLLER, SANDPAPER, MASKING TAPE; `INVOICE_QTY` for the others, with `Qualification` = `InvoicedQty` (rule of 2026-10-22) |
+| API1_TC_4 | Functional | Ordering | By `ClearCut`, highest first (empty last); equal `ClearCut`: by ToDate, then template order, then other components by name (changed 2026-10-22) |
 | API1_TC_5 | Functional | Customer value | Equals the requested dealer |
 | API1_TC_6 | Functional | Dealer code as JSON number | Same result as string |
 | API1_TC_7 | Functional | Leading zeros | Same result as without |
@@ -357,9 +357,11 @@ data is; override with `MONTH` / `YEAR`).
 | API1_TC_11 | Functional | Month with no data (January 2000) | 200 `[]` |
 | API1_TC_12 | Validation | Date format and range | `YYYY-MM-DD`, FromDate ≤ ToDate |
 | API1_TC_13 | Validation | Amount types | Numbers or null, never strings |
-| API1_TC_14 | Validation | Component uniqueness | Each component once per dealer (newest SAP update only; no old end date or old agreement) |
+| API1_TC_14 | Validation | Component uniqueness | Each component once per start date (newest SAP update only; no old end date or old agreement) |
 | API1_TC_15 | Validation | Month | Every row's validity period overlaps the requested month |
 | API1_TC_16 | Validation | [sample] All 10 components | Present for 6100000001 |
+| API1_TC_80 | Validation | [sample] Other components | `ALWD EB2` for 6100000001: `Qualification` = invoiced quantity 12.5, `QualificationBasis` `INVOICE_QTY`, `InvoicedQty` 12.5; `ROLLER`: `Qualification` = GSR (Q) 11350, `QualificationBasis` `GSR`, `InvoicedQty` 50; `LUXURY` has neither field |
+| API1_TC_81 | Validation | [sample] ClearCut order | 6100000001: ROLLER (2951), LUXURY (1592.93), then the 0 rows in template order, ALWD EB2 last |
 | API1_TC_17 | Validation | [sample] Latest update wins | Day-2 LUXURY values replace day 1 (not added) |
 | API1_TC_18 | Validation | [sample] SAP trailing-minus numbers | `-882` |
 | API1_TC_19 | Validation | [sample] Qualification basis | GSR for EB slabs and Value; EB FULL MONTH = its GSR (GsrB); invoiced qty for Luxury/Premium |

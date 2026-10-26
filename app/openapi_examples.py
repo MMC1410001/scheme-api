@@ -28,11 +28,16 @@ def _row(component, to_date, qualification, gsr_b, rate, clear_cut=0.0, shortfal
 
 API1_ROWS = {
     "rows": {
-        "summary": "Dealer with data (3 of the 10 components shown)",
+        "summary": "Dealer with data, by ClearCut highest first (3 of the 10 components and two others shown)",
         "value": [
-            _row("EB SLAB 1", "2026-10-11", 405232.86, 405232.86, 0.75, next_rate=1.0),
+            # Outside the 10: QualificationBasis says what Qualification holds; InvoicedQty is sent too.
+            {**_row("ROLLER", "2026-10-31", 11350.0, 11350.0, 26.0, 2951.0), "QualificationBasis": "GSR",
+             "InvoicedQty": 50.0},
             _row("LUXURY", "2026-10-31", 315.1, 159292.8, 1.0, 1592.93, 84.9, 21.23, 1.5),
+            _row("EB SLAB 1", "2026-10-11", 405232.86, 405232.86, 0.75, next_rate=1.0),
             _row("EB FULL MONTH", "2026-10-31", 405232.86, 405232.86, 2.25),
+            {**_row("ALWD EB2", "2026-10-31", 12.5, 405232.86, 1.0), "QualificationBasis": "INVOICE_QTY",
+             "InvoicedQty": 12.5},
         ],
     },
     "empty": {"summary": "No data for this dealer or month", "value": []},
@@ -61,6 +66,15 @@ ERRORS = {
     500: _error("Unexpected server error; details are logged, not returned", "Internal server error"),
     503: _error("No free database connection; retry after the Retry-After seconds", "Service busy, please retry",
                 headers={"Retry-After": {"description": "Seconds to wait", "schema": {"type": "integer"}}}),
+}
+
+
+HEALTH_RESPONSES = {
+    200: {"description": "The API is up and its database answers",
+          "content": {"application/json": {"example": {"ok": True}}}},
+    503: {"description": "The database did not answer within 2 seconds",
+          "content": {"application/json": {"example": {"ok": False, "detail": "Database unreachable"}}},
+          "headers": {"Retry-After": {"description": "Seconds to wait", "schema": {"type": "integer"}}}},
 }
 
 

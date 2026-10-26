@@ -5,6 +5,7 @@
     python -m ingestion.run schemes --year 2026 --month 9
     python -m ingestion.run schemes --year 2026 --month 9 --reload   # re-read files already loaded
     python -m ingestion.run schemes --year 2026 --month 9 --limit 5  # at most 5 new files (testing)
+    python -m ingestion.run compact                    # give freed space back to the disk (locks the table)
 """
 import argparse
 import logging
@@ -16,7 +17,7 @@ from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator
 from itertools import islice
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -25,8 +26,11 @@ from psycopg.rows import dict_row
 
 from app.cache import bump_data_version
 from app.config import get_settings
+from app.logfile import log_to_file
 from ingestion.excel import read_table
-from ingestion.load import is_loaded, save_scheme_file
+from ingestion.load import (
+    compact_raw, delete_expired, is_loaded, prune_all, requalify, retention_cutoff, save_scheme_file,
+)
 from ingestion.schemes import check_columns, to_record
 from ingestion.sources import SourceFile, list_files, month_prefixes
 
@@ -115,7 +119,7 @@ def load_schemes(
             try:
                 records, counts, read_seconds = future.result()
                 started = time.monotonic()
-                save_scheme_file(conn, file, year, month, records, counts["rows_bad"])
+                stats["rows_replaced"] += save_scheme_file(conn, file, year, month, records, counts["rows_bad"])
             except psycopg.OperationalError:
                 raise  # connection lost: main() reconnects and retries this file
             except UnreadableFile as exc:
@@ -158,7 +162,7 @@ def load_schemes(
 def parse_scheme_file(
     content: bytes, path: str, year: int, month: int, header_rows: int, log_rows: bool = True,
 ) -> tuple[list[dict], Counter]:
-    """One SAP file's rows for the 10 template components, plus counts of rows left out.
+    """One SAP file's rows (every component), plus counts of rows left out.
     With log_rows, each skipped row is logged with the reason. Raises UnreadableFile if the file
     can't be parsed at all or lacks the expected columns (checked even when it has no data rows)."""
     counts: Counter = Counter()
@@ -178,7 +182,7 @@ def parse_scheme_file(
             counts["rows_bad"] += 1
             continue
         if record is None:
-            counts["rows_other_components"] += 1
+            counts["rows_no_component"] += 1
         else:
             records.append(record)
     return records, counts
@@ -209,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Load Scheme files from GCS into Postgres.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init-db", help="create the tables")
+    commands.add_parser("compact", help="give the space of deleted and rewritten rows back to the disk "
+                                        "(VACUUM FULL: scheme_records is locked, API requests wait, ~1-2 min)")
     schemes = commands.add_parser("schemes", help="load one month of scheme files (default: current month)")
     schemes.add_argument("--year", type=int)
     schemes.add_argument("--month", type=int)
@@ -217,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = get_settings()
+    log_to_file(settings)
     stats: Counter = Counter()
     done: set[str] = set()
     run_name = f"scheme-loader-{os.getpid()}-{secrets.token_hex(3)}"  # names this run's sessions
@@ -228,6 +235,18 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "init-db":
                     ensure_schema(conn)
                     log.info("Tables created")
+                    return 0
+                if args.command == "compact":
+                    if not take_loader_lock(conn, run_name):
+                        log.warning("A loader run is in progress; try again when it has finished")
+                        return 1
+                    before = conn.execute("SELECT pg_total_relation_size('scheme_records') AS n").fetchone()["n"]
+                    log.info("Compacting scheme_records; it is locked until this finishes")
+                    # FULL takes no PARALLEL option; its index rebuilds use these workers (and shared memory).
+                    conn.execute("SET max_parallel_maintenance_workers = 0")
+                    conn.execute("VACUUM (FULL, ANALYZE) scheme_records")
+                    after = conn.execute("SELECT pg_total_relation_size('scheme_records') AS n").fetchone()["n"]
+                    log.info("scheme_records: %d MB -> %d MB", before // 2**20, after // 2**20)
                     return 0
                 if args.command == "schemes":
                     if not take_loader_lock(conn, run_name, reclaim=attempt > 1):
@@ -245,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                     if limit is None or limit > 0:
                         load_schemes(conn, args.year or today.year, args.month or today.month,
                                      args.reload, limit, stats, done)
+                    tidy_up(conn, today, settings.loader_retention_months, stats)
             break
         except psycopg.OperationalError as exc:
             if attempt == RECONNECT_ATTEMPTS:
@@ -255,9 +275,41 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("Done: %s", dict(stats))
     # rows_loaded also counts the good rows of files marked failed, which are saved too.
-    if (stats["files_loaded"] or stats["rows_loaded"]) and settings.cache_enabled and settings.redis_url:
+    if (stats["files_loaded"] or stats["rows_loaded"] or stats["rows_expired"] or stats["rows_requalified"]) \
+            and settings.cache_enabled and settings.redis_url:
         bump_data_version(settings.redis_url)  # cached API responses now get the new data
     return 1 if stats["files_failed"] or lost_lock else 0
+
+
+def tidy_up(conn: psycopg.Connection, today: date, retention_months: int, stats: Counter) -> None:
+    """After the load: once per database, rewrite raw stored as objects as values only, delete the
+    older versions stored before each file pruned its own and apply the 2026-10-22 qualification rule
+    to rows stored before it; then delete schemes that ended before the oldest month kept. Space freed
+    is reused; `compact` gives it back to the disk."""
+    rewritten = compact_raw(conn)
+    if rewritten is not None:
+        log.info("One-off clean-up: stored raw as values only for %d rows (names in raw_layouts)", rewritten)
+    pruned = prune_all(conn)
+    if pruned is not None:
+        log.info("One-off clean-up: deleted %d older versions of schemes", pruned)
+        stats["rows_replaced"] += pruned
+    requalified = requalify(conn)
+    if requalified is not None:
+        log.info("One-off clean-up: Qualification = invoiced quantity for %d rows outside the GSR components",
+                 requalified)
+        stats["rows_requalified"] += requalified
+    expired = 0
+    if retention_months > 0:
+        cutoff = retention_cutoff(today, retention_months)
+        expired = delete_expired(conn, cutoff)
+        if expired:
+            log.info("Deleted %d schemes that ended before %s (LOADER_RETENTION_MONTHS=%d)",
+                     expired, cutoff, retention_months)
+        stats["rows_expired"] += expired
+    if rewritten or pruned or requalified or expired:
+        # Big change: mark space reusable, refresh statistics. PARALLEL 0: parallel index vacuuming needs
+        # a shared memory segment of maintenance_work_mem, larger than dev's /dev/shm (failed 2026-10-21).
+        conn.execute("VACUUM (ANALYZE, PARALLEL 0) scheme_records")
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:

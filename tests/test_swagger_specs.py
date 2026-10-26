@@ -61,7 +61,8 @@ def test_api1_response_examples_match_the_row_model():
     examples = load(SPECS[endpoint][0])["paths"][endpoint]["post"]["responses"]["200"]["content"]["application/json"]["examples"]
     for example in examples.values():
         for row in example["value"]:
-            assert SchemeRow.model_validate(row).model_dump(mode="json", by_alias=True) == row
+            # QualificationBasis and InvoicedQty are sent only on rows of components outside the 10.
+            assert SchemeRow.model_validate(row).model_dump(mode="json", by_alias=True, exclude_unset=True) == row
 
 
 @pytest.mark.parametrize("endpoint", SPECS)

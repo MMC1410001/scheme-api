@@ -20,7 +20,11 @@ SCHEME_ROW = {
     "shortfall_amount": Decimal("49.5"),
     "shortfall_pct": Decimal("16.5"),
     "next_slab_rate": Decimal("1.25"),
+    "qualification_basis": "INVOICE_QTY",
+    "invoiced_qty": Decimal("250.5"),
 }
+OTHER_ROW = {**SCHEME_ROW, "component_description": "ROLLER", "qualification": Decimal("11350"),
+             "qualification_basis": "GSR", "invoiced_qty": Decimal("50")}
 
 
 MONTH = {"month": 9, "year": 2026}
@@ -29,10 +33,14 @@ MONTH = {"month": 9, "year": 2026}
 class FakeRepository:
     def __init__(self):
         self.calls = []
+        self.rows = [SCHEME_ROW]
 
     def month_schemes(self, dealer_code, year, month):
         self.calls.append((dealer_code, year, month))
-        return [SCHEME_ROW]
+        return self.rows
+
+    def ping(self, timeout):
+        pass
 
 
 @pytest.fixture
@@ -68,6 +76,28 @@ def test_api1_returns_template_columns_for_the_requested_month(client, repo):
             "NextSlabRate": 1.25,
         }
     ]
+
+
+def test_other_components_carry_their_basis_and_invoiced_qty_and_the_10_stay_as_agreed(client, repo):
+    """Components outside the 10 say what Qualification holds (ROLLER: GSR) and carry InvoicedQty.
+    Rows of the 10 keep exactly the agreed keys."""
+    repo.rows = [SCHEME_ROW, OTHER_ROW]
+    template, other = client.post("/v1/schemes/current-month", json={"dealer_code": "6100009999", **MONTH}).json()
+    assert "InvoicedQty" not in template and "QualificationBasis" not in template
+    assert other["ComponentDescription"] == "ROLLER"
+    assert other["Qualification"] == 11350.0 and other["InvoicedQty"] == 50.0
+    assert other["QualificationBasis"] == "GSR"
+    assert set(other) == set(template) | {"QualificationBasis", "InvoicedQty"}
+    assert SCHEME_ROW["invoiced_qty"] == Decimal("250.5")  # the repository's rows are not changed
+
+
+def test_other_component_without_an_invoiced_quantity_still_has_the_key(client, repo):
+    repo.rows = [{**OTHER_ROW, "invoiced_qty": None}]
+    assert client.post("/v1/schemes/current-month", json={"dealer_code": "6100009999", **MONTH}).json()[0]["InvoicedQty"] is None
+
+
+def test_the_old_api_components_setting_is_ignored():
+    assert not hasattr(Settings(_env_file=None, api_components="all"), "api_components")
 
 
 def test_leading_zeros_in_dealer_code_are_ignored(client, repo):

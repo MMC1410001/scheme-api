@@ -1,6 +1,6 @@
 """Loader schedule inside the API: new SAP files reach the database without a separate cron job.
 
-Once a day at LOADER_DAILY_AT (09:00, India time: SAP's files land around 04:30-05:00) the API runs
+Once a day at LOADER_DAILY_AT (05:00, India time: SAP's files land around 04:30-04:51) the API runs
 `python -m ingestion.run schemes` for the current month in a child process, so a slow or crashing
 load never blocks or takes down request handling. In the first LOADER_CATCH_UP_DAYS days of a month
 it also loads the previous month, so files of its last day are not missed.
@@ -16,6 +16,7 @@ its own lock too, so a manual run and a scheduled run never overlap.
 """
 import asyncio
 import logging
+import os
 import sys
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -41,6 +42,16 @@ def months_to_load(today: date, catch_up_days: int) -> list[tuple[int, int]]:
     if today.day <= catch_up_days:
         months.insert(0, (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1))
     return months
+
+
+def log_schedule_off(settings: Settings) -> None:
+    """Say at start-up that no load will run, and why, so a server that forgets APP_ENV shows it in its log.
+    A warning unless APP_ENV=local is set explicitly: only a developer machine is expected to run without it."""
+    level = logging.INFO if os.environ.get("APP_ENV") == "local" else logging.WARNING
+    log.log(level, "Loader schedule off (APP_ENV=%s, LOADER_SCHEDULE_ENABLED=%s): new SAP files are not loaded. "
+             "Set APP_ENV=dev|uat|prod or LOADER_SCHEDULE_ENABLED=true to turn it on",
+             os.environ.get("APP_ENV", "(not set)"),
+             "(not set)" if settings.loader_schedule_enabled is None else str(settings.loader_schedule_enabled).lower())
 
 
 def next_run_at(now: datetime, daily_at: time) -> datetime:

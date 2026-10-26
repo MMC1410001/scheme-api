@@ -1,4 +1,4 @@
-"""The API's loader schedule (app/scheduler.py): daily at 09:00 India time, which months, on by default
+"""The API's loader schedule (app/scheduler.py): daily at 05:00 India time, which months, on by default
 outside local, failed or hung runs are tried again, and only one worker runs the load.
 
 The leader test needs a Postgres, so it only runs when TEST_DATABASE_URL is set (see test_load_db.py).
@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from app import config
 from app.config import Settings
-from app.scheduler import LoaderScheduler, months_to_load, next_run_at
+from app.scheduler import LoaderScheduler, log_schedule_off, months_to_load, next_run_at
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -40,17 +40,17 @@ def test_months_to_load_without_catch_up():
 
 
 @pytest.mark.parametrize(("now", "expected"), [
-    (datetime(2026, 10, 19, 0, 30, tzinfo=IST), datetime(2026, 10, 19, 9, 0, tzinfo=IST)),
-    (datetime(2026, 10, 19, 8, 59, 59, tzinfo=IST), datetime(2026, 10, 19, 9, 0, tzinfo=IST)),
-    (datetime(2026, 10, 19, 9, 0, tzinfo=IST), datetime(2026, 10, 20, 9, 0, tzinfo=IST)),
-    (datetime(2026, 10, 31, 15, 0, tzinfo=IST), datetime(2026, 11, 1, 9, 0, tzinfo=IST)),
+    (datetime(2026, 10, 19, 0, 30, tzinfo=IST), datetime(2026, 10, 19, 5, 0, tzinfo=IST)),
+    (datetime(2026, 10, 19, 4, 59, 59, tzinfo=IST), datetime(2026, 10, 19, 5, 0, tzinfo=IST)),
+    (datetime(2026, 10, 19, 5, 0, tzinfo=IST), datetime(2026, 10, 20, 5, 0, tzinfo=IST)),
+    (datetime(2026, 10, 31, 15, 0, tzinfo=IST), datetime(2026, 11, 1, 5, 0, tzinfo=IST)),
 ])
-def test_next_run_is_the_next_9am(now, expected):
-    assert next_run_at(now, time(9, 0)) == expected
+def test_next_run_is_the_next_5am(now, expected):
+    assert next_run_at(now, time(5, 0)) == expected
 
 
-def test_default_is_daily_at_9():
-    assert settings().loader_daily_at == "09:00"
+def test_default_is_daily_at_5():
+    assert settings().loader_daily_at == "05:00"
 
 
 @pytest.mark.parametrize(("value", "expected"), [("9:00", "09:00"), (" 21:30 ", "21:30")])
@@ -134,6 +134,26 @@ def test_database_down_counts_as_failure(monkeypatch, caplog):
     caplog_scheduler(monkeypatch)
     assert daily(monkeypatch, None, [True], retries=2) == []
     assert "failed 3 times" in caplog.text
+
+
+def test_schedule_off_is_logged_with_why(monkeypatch, caplog):
+    caplog_scheduler(monkeypatch)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    caplog.set_level(logging.INFO, "app.scheduler")
+    log_schedule_off(settings(loader_schedule_enabled=None))
+    assert "Loader schedule off (APP_ENV=(not set), LOADER_SCHEDULE_ENABLED=(not set))" in caplog.text
+    monkeypatch.setenv("APP_ENV", "dev")
+    log_schedule_off(settings(loader_schedule_enabled=False))
+    assert "Loader schedule off (APP_ENV=dev, LOADER_SCHEDULE_ENABLED=false)" in caplog.text
+    assert {r.levelno for r in caplog.records} == {logging.WARNING}
+
+
+def test_schedule_off_is_info_only_with_explicit_local(monkeypatch, caplog):
+    caplog_scheduler(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "local")
+    caplog.set_level(logging.INFO, "app.scheduler")
+    log_schedule_off(settings(loader_schedule_enabled=None))
+    assert {r.levelno for r in caplog.records} == {logging.INFO}
 
 
 def caplog_scheduler(monkeypatch):

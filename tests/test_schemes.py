@@ -81,9 +81,30 @@ def test_eb_full_month_takes_its_gsr_from_gsr_b_like_the_slabs():
     assert record["gsr_b"] == Decimal("405232.86")
 
 
-@pytest.mark.parametrize("component", ["ALWD EB2", "ALWD VALUE SCH", "ALWD VALUE", "VALUE SCH %", "VALUE SCH FA",
-                                       "ADDN LUX INT", "ADDTNL PREMIUM 01", "ROLLER"])
-def test_look_alike_components_are_dropped(component):
+@pytest.mark.parametrize("component", ["ALWD EB2", "EB ADD FA 02", "ALWD VALUE SCH", "ALWD VALUE", "VALUE SCH %",
+                                       "VALUE SCH FA", "ADDN LUX INT", "ADDTNL PREMIUM 01", "WALLPAPER ROLL"])
+def test_other_components_are_stored_under_their_own_name_on_invoiced_quantity(component):
+    """Every SAP component is stored and returned. A look-alike keeps its own name, so it never mixes
+    with a GSR component; outside the GSR components Qualification is invoiced quantity (Q)."""
+    record = to_record(sap_row(**{"Comp desc": component, "GSR (Q)": "11350.00 ", "Invoiced Quantity(Q)": "7.000 "}),
+                       2026, 8, "f.csv")
+    assert record["component"] == component
+    assert record["qualification_basis"] == "INVOICE_QTY"
+    assert record["qualification"] == Decimal("7.000")
+    assert record["invoiced_qty"] == Decimal("7.000")
+
+
+@pytest.mark.parametrize("component", ["ROLLER", "SANDPAPER", "MASKING TAPE"])
+def test_roller_sandpaper_and_masking_tape_qualify_on_gsr_q(component):
+    record = to_record(sap_row(**{"Comp desc": component, "GSR (Q)": "11350.00 ", "Invoiced Quantity(Q)": "7.000 "}),
+                       2026, 8, "f.csv")
+    assert record["qualification_basis"] == "GSR"
+    assert record["qualification"] == Decimal("11350.00")
+    assert record["invoiced_qty"] == Decimal("7.000")
+
+
+@pytest.mark.parametrize("component", ["", "   "])
+def test_rows_without_a_component_are_dropped(component):
     assert to_record(sap_row(**{"Comp desc": component}), 2026, 8, "f.csv") is None
 
 

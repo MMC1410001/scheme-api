@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 from datetime import datetime
@@ -18,7 +20,9 @@ ENV_FILE = f".env.{APP_ENV}"
 class Settings(BaseSettings):
     """All configuration comes from environment variables or the APP_ENV's file (ENV_FILE)."""
 
-    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+    # hide_input_in_errors: a bad secret (GCS_CREDENTIALS_JSON, JWT_SECRET) must not be printed in the
+    # start-up error; the message still names the setting.
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore", hide_input_in_errors=True)
 
     database_url: str = "postgresql://acme:acme@localhost:5433/acme"
     # Per worker process. Total connections = workers x db_pool_max.
@@ -59,10 +63,20 @@ class Settings(BaseSettings):
     # The loader's default month (`ingestion.run schemes` without --year/--month) is the current
     # month in this timezone, not the server's. The API always takes the month from the request.
     timezone: str = "Asia/Kolkata"
+    # Also write the log to daily files (app/logfile.py): /var/log/scheme-api/scheme-api.log
+    # gives scheme-api-2026-10-23.log in that folder (a day in TIMEZONE). Empty: console only.
+    log_file: str | None = None
+    # Days of log files kept, today included; older ones are deleted. 0 keeps every file.
+    log_file_keep_days: int = 14
 
     gcs_bucket: str = "acme-scheme-files"
     # Optional Google Cloud project ID for the GCS client (not needed just to read the bucket).
     gcs_project: str | None = None
+    # The GCS service-account key itself, so no key file has to be mounted: the key's JSON file as
+    # base64 on one line (`base64 -w0 key.json`; on macOS `base64 -i key.json`), or the JSON on one line.
+    # Wins over GOOGLE_APPLICATION_CREDENTIALS (a key file path). Empty: the key file, else the server's
+    # own service account.
+    gcs_credentials_json: SecretStr | None = None
     scheme_prefix_template: str = "sap-exports/{year}/{month:02d}/"
     # Read files from this local folder instead of GCS (development only).
     local_data_dir: str | None = None
@@ -73,8 +87,8 @@ class Settings(BaseSettings):
     # The API runs the loader on a schedule (app/scheduler.py), so no separate cron job is needed.
     # Unset: on everywhere except APP_ENV=local. Set false where a cron job runs the loader instead.
     loader_schedule_enabled: bool | None = None
-    # Daily run time, HH:MM in TIMEZONE. SAP's files land around 04:30-05:00 India time.
-    loader_daily_at: str = "09:00"
+    # Daily run time, HH:MM in TIMEZONE. SAP's files land around 04:30-04:51 India time.
+    loader_daily_at: str = "05:00"
     # A failed run is tried again this many times, this many minutes apart.
     loader_retries: int = 3
     loader_retry_minutes: int = 30
@@ -82,10 +96,19 @@ class Settings(BaseSettings):
     loader_timeout_minutes: int = 120
     # In the first days of a month the previous month is loaded too (late files of its last day).
     loader_catch_up_days: int = 3
+    # Months of schemes kept, the current one included: 3 in October keeps October, September and
+    # August. A scheme goes once its period ended before the oldest kept month. 0 keeps everything.
+    loader_retention_months: int = 3
 
     @property
     def loader_schedule_on(self) -> bool:
         return APP_ENV != "local" if self.loader_schedule_enabled is None else self.loader_schedule_enabled
+
+    @property
+    def gcs_credentials_info(self) -> dict | None:
+        """GCS_CREDENTIALS_JSON as the key's JSON object, or None when it is not set."""
+        return None if self.gcs_credentials_json is None else _service_account_info(
+            self.gcs_credentials_json.get_secret_value())
 
 
     @field_validator("auth_clients", mode="before")
@@ -106,6 +129,7 @@ class Settings(BaseSettings):
             ip_network(entry, strict=False)  # ValueError names the bad entry
         return value
 
+
     @field_validator("loader_schedule_enabled", mode="before")
     @classmethod
     def _empty_is_default(cls, value):
@@ -119,10 +143,30 @@ class Settings(BaseSettings):
         parsed = datetime.strptime(value.strip(), "%H:%M").time()
         return f"{parsed.hour:02d}:{parsed.minute:02d}"
 
-    @field_validator("jwt_secret", "jwt_previous_secret", mode="before")
+    @field_validator("jwt_secret", "jwt_previous_secret", "gcs_credentials_json", mode="before")
     @classmethod
     def _empty_secret_is_unset(cls, value):
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("gcs_credentials_json")
+    @classmethod
+    def _check_gcs_credentials(cls, value: SecretStr | None) -> SecretStr | None:
+        """Checked at start-up so a bad key stops the API, not the 05:00 load."""
+        if value is not None:
+            _service_account_info(value.get_secret_value())
+        return value
+
+
+def _service_account_info(text: str) -> dict:
+    """The key's JSON object from base64 or plain JSON; ValueError (without the key) if it is neither."""
+    text = text.strip()
+    try:
+        info = json.loads(text if text.startswith("{") else base64.b64decode(text, validate=True))
+    except (ValueError, binascii.Error):
+        raise ValueError("GCS_CREDENTIALS_JSON is neither base64 of the key file nor its JSON") from None
+    if not isinstance(info, dict) or not {"client_email", "private_key"} <= info.keys():
+        raise ValueError("GCS_CREDENTIALS_JSON is not a service-account key (client_email, private_key missing)")
+    return info
 
 
 @lru_cache

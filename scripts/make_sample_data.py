@@ -50,7 +50,9 @@ for customer, gsr in (("6100000001", "405232.86 "), ("6100000002", "882.00-")): 
         row(customer, "07", "PREMIUM 01", last, "0.00", "0.000", "0.00", "0.00", "0.00", "40.00", "100.00", day1),
         row(customer, "08", "PREMIUM 02", last, "0.00", "0.000", "0.00", "0.00", "0.00", "8.00", "100.00", day1),
         row(customer, "5!", "EB FULL MONTH", last, "0.00", "0.000", gsr, "2.25", "0.00", "0.00", "0.00", day1),
-        row(customer, "65", "ALWD EB2", last, gsr, "0.000", gsr, "1.00", "0.00", "0.00", "0.00", day1),  # dropped
+        # Outside the 10: ALWD EB2 qualifies on invoiced quantity (12.5), ROLLER on GSR (Q).
+        row(customer, "65", "ALWD EB2", last, gsr, "12.500", gsr, "1.00", "0.00", "0.00", "0.00", day1),
+        row(customer, "66", "ROLLER", last, "11350.00", "50.000", "11350.00", "26.00", "2951.00", "0.00", "0.00", day1),
     ]
 DAY2 = [
     row("6100000001", "06", "LUXURY", last, "315.10", "315.100", "159292.80", "1.00", "1592.93", "84.90", "21.23", day2, "1.50"),

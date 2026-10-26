@@ -6,13 +6,14 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import psycopg
 import pytest
 
 from app.config import Settings
 from ingestion import run
+from ingestion.load import retention_cutoff
 
 CONNECTS = []
 
@@ -29,6 +30,7 @@ def no_wait(monkeypatch):
     monkeypatch.setattr(run.psycopg, "connect", connect)
     monkeypatch.setattr(run, "take_loader_lock", lambda *a, **k: True)
     monkeypatch.setattr(run, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(run, "tidy_up", lambda *a: None)
 
 
 def test_schemes_reconnects_and_resumes_after_connection_loss(monkeypatch, no_wait):
@@ -145,12 +147,12 @@ def fake_month(monkeypatch):
             month["running"] -= 1
         if content == b"d":
             raise run.UnreadableFile("ValueError: Missing columns ['customer']")
-        return [{"file": content.decode()}] * 2, Counter(rows_other_components=1)
+        return [{"file": content.decode()}] * 2, Counter(rows_no_component=1)
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
     monkeypatch.setattr(run, "save_scheme_file",
                         lambda conn, f, y, m, records, rows_bad=0, failed=False:
-                        month["saved"].append(f.path.rsplit("/", 1)[1] + (" (failed)" if failed else "")))
+                        month["saved"].append(f.path.rsplit("/", 1)[1] + (" (failed)" if failed else "")) or 0)
     return month
 
 
@@ -163,7 +165,7 @@ def test_files_are_saved_in_listing_order_and_bad_files_are_counted(fake_month):
     # b already loaded; d unreadable twice, so recorded as failed (not retried by later runs)
     assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
     assert fake_month["parsed"].count("d") == 2  # read once more before giving up
-    assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_other_components=3)
+    assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_no_component=3)
 
 
 @pytest.mark.parametrize(("limit", "saved"), [(1, ["a.csv"]), (2, ["a.csv", "c.csv"])])
@@ -171,7 +173,7 @@ def test_limit_loads_only_the_first_new_files(fake_month, limit, saved):
     stats = run.load_schemes(object(), 2026, 9, limit=limit)
     assert fake_month["saved"] == saved
     assert fake_month["parsed"] == [s[0] for s in saved]  # nothing beyond the limit is even read
-    assert stats == Counter(files_loaded=limit, rows_loaded=2 * limit, files_skipped=1, rows_other_components=limit)
+    assert stats == Counter(files_loaded=limit, rows_loaded=2 * limit, files_skipped=1, rows_no_component=limit)
 
 
 def test_stats_are_kept_in_the_callers_counter(fake_month):
@@ -245,7 +247,7 @@ def test_counts_are_right_after_a_reconnect(fake_month, monkeypatch):
         if f.path.endswith("c.csv") and not lost:
             lost.append(f.path)
             raise psycopg.OperationalError("the connection is closed")
-        real_save(conn, f, y, m, records, rows_bad, failed)
+        return real_save(conn, f, y, m, records, rows_bad, failed)
 
     monkeypatch.setattr(run, "save_scheme_file", save)
     stats, done = Counter(), set()
@@ -253,7 +255,7 @@ def test_counts_are_right_after_a_reconnect(fake_month, monkeypatch):
         run.load_schemes(object(), 2026, 9, stats=stats, done=done)
     run.load_schemes(object(), 2026, 9, stats=stats, done=done)  # what main() does after reconnecting
     assert fake_month["saved"] == ["a.csv", "c.csv", "d.csv (failed)", "e.csv"]
-    assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_other_components=3)
+    assert stats == Counter(files_loaded=3, rows_loaded=6, files_skipped=1, files_failed=1, rows_no_component=3)
 
 
 def test_lost_connection_does_not_wait_for_downloads_in_progress(fake_month, monkeypatch):
@@ -300,7 +302,7 @@ def one_file(monkeypatch):
 
     monkeypatch.setattr(run, "parse_scheme_file", parse)
     monkeypatch.setattr(run, "save_scheme_file",
-                        lambda conn, f, y, m, records, rows_bad=0: state["saved"].append((len(records), rows_bad)))
+                        lambda conn, f, y, m, records, rows_bad=0: state["saved"].append((len(records), rows_bad)) or 0)
     return state
 
 
@@ -352,7 +354,7 @@ def test_each_bad_row_is_logged_once_even_when_the_file_is_read_twice(monkeypatc
                           updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc), read=lambda: csv)
     monkeypatch.setattr(run, "list_files", lambda prefix: [file])
     monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
-    monkeypatch.setattr(run, "save_scheme_file", lambda *a, **k: None)
+    monkeypatch.setattr(run, "save_scheme_file", lambda *a, **k: 0)
     stats = run.load_schemes(object(), 2026, 9)
     assert stats == Counter(files_failed=1, rows_loaded=1, rows_bad=1)
     assert caplog.text.count("data row 2 skipped") == 1
@@ -377,7 +379,7 @@ def test_both_month_folders_are_loaded_when_both_exist(monkeypatch):
     monkeypatch.setattr(run, "list_files", lambda prefix: listed.get(prefix, []))
     monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
     monkeypatch.setattr(run, "parse_scheme_file", lambda content, *a, **k: ([{"f": content}], Counter()))
-    monkeypatch.setattr(run, "save_scheme_file", lambda conn, f, *a, **k: saved.append(f.path))
+    monkeypatch.setattr(run, "save_scheme_file", lambda conn, f, *a, **k: saved.append(f.path) or 0)
     stats = run.load_schemes(object(), 2026, 1)
     assert saved == ["sap-exports/2026/01/a.csv", "sap-exports/2026/1/b.csv"]
     assert stats["files_loaded"] == 2
@@ -408,7 +410,7 @@ def test_an_unreadable_file_is_read_again_then_recorded_as_failed(monkeypatch):
     monkeypatch.setattr(run, "list_files", lambda prefix: [bad] if prefix.endswith("/10/") else [])
     monkeypatch.setattr(run, "is_loaded", lambda conn, kind, f: False)
     monkeypatch.setattr(run, "save_scheme_file",
-                        lambda conn, f, y, m, records, rows_bad=0, failed=False: saved.append((f.path, records, failed)))
+                        lambda conn, f, y, m, records, rows_bad=0, failed=False: saved.append((f.path, records, failed)) or 0)
     stats = run.load_schemes(object(), 2026, 10)
     assert len(reads) == 2
     assert saved == [("sap-exports/2026/10/x.csv", [], True)]
@@ -444,3 +446,86 @@ def test_the_default_month_is_the_current_month_in_india_time(monkeypatch, no_wa
     monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None, timezone="UTC"))
     run.main(["schemes"])
     assert months == [(2026, 11), (2026, 10)]
+
+
+@pytest.mark.parametrize("today, months, cutoff", [
+    (date(2026, 10, 19), 3, date(2026, 8, 1)),   # current, previous and the one before: Oct, Sep, Aug
+    (date(2026, 10, 1), 3, date(2026, 8, 1)),
+    (date(2026, 10, 31), 3, date(2026, 8, 1)),
+    (date(2027, 1, 5), 3, date(2026, 11, 1)),    # across a year end
+    (date(2027, 2, 5), 3, date(2026, 12, 1)),
+    (date(2026, 10, 19), 1, date(2026, 10, 1)),  # this month only
+    (date(2026, 10, 19), 12, date(2025, 11, 1)),
+])
+def test_retention_keeps_whole_months_counting_the_current_one(today, months, cutoff):
+    assert retention_cutoff(today, months) == cutoff
+
+
+class FakeTidyConn:
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, *args):
+        self.executed.append(sql)
+
+
+@pytest.mark.parametrize("rewritten, pruned, requalified, expired, vacuum", [
+    (None, None, None, 0, False), (None, None, None, 4, True), (None, 7, None, 0, True), (0, 0, 0, 0, False),
+    (9, None, None, 0, True), (None, None, 12, 0, True)])
+def test_tidy_up_prunes_once_deletes_expired_and_vacuums_after_a_delete(
+        monkeypatch, rewritten, pruned, requalified, expired, vacuum):
+    cutoffs = []
+    monkeypatch.setattr(run, "compact_raw", lambda conn: rewritten)
+    monkeypatch.setattr(run, "prune_all", lambda conn: pruned)
+    monkeypatch.setattr(run, "requalify", lambda conn: requalified)
+    monkeypatch.setattr(run, "delete_expired", lambda conn, cutoff: cutoffs.append(cutoff) or expired)
+    conn, stats = FakeTidyConn(), Counter()
+    run.tidy_up(conn, date(2026, 10, 19), 3, stats)
+    assert cutoffs == [date(2026, 8, 1)]
+    assert stats["rows_expired"] == expired and stats["rows_replaced"] == (pruned or 0)
+    assert stats["rows_requalified"] == (requalified or 0)
+    assert conn.executed == (["VACUUM (ANALYZE, PARALLEL 0) scheme_records"] if vacuum else [])
+
+
+def test_retention_zero_keeps_everything(monkeypatch):
+    monkeypatch.setattr(run, "compact_raw", lambda conn: None)
+    monkeypatch.setattr(run, "prune_all", lambda conn: None)
+    monkeypatch.setattr(run, "requalify", lambda conn: None)
+    monkeypatch.setattr(run, "delete_expired", lambda conn, cutoff: pytest.fail("must not delete with retention 0"))
+    run.tidy_up(FakeTidyConn(), date(2026, 10, 19), 0, Counter())
+
+
+def test_the_run_tidies_up_after_loading_with_the_retention_setting(monkeypatch, no_wait):
+    calls = []
+    monkeypatch.setattr(run, "load_schemes", lambda *a: calls.append("load"))
+    monkeypatch.setattr(run, "tidy_up", lambda conn, today, months, stats: calls.append(("tidy", months)))
+    monkeypatch.setattr(run, "get_settings", lambda: Settings(_env_file=None, loader_retention_months=3))
+    assert run.main(["schemes", "--year", "2026", "--month", "9"]) == 0
+    assert calls == ["load", ("tidy", 3)]
+
+
+def test_expired_schemes_refresh_the_cache(monkeypatch, no_wait):
+    bumped = []
+    monkeypatch.setattr(run, "load_schemes", lambda *a: None)
+    monkeypatch.setattr(run, "tidy_up", lambda conn, today, months, stats: stats.update(rows_expired=5))
+    monkeypatch.setattr(run, "bump_data_version", bumped.append)
+    monkeypatch.setattr(run, "get_settings",
+                        lambda: Settings(_env_file=None, cache_enabled=True, redis_url="redis://example"))
+    assert run.main(["schemes", "--year", "2026", "--month", "9"]) == 0
+    assert bumped == ["redis://example"]
+
+
+def test_requalified_rows_refresh_the_cache(monkeypatch, no_wait):
+    bumped = []
+    monkeypatch.setattr(run, "load_schemes", lambda *a: None)
+    monkeypatch.setattr(run, "tidy_up", lambda conn, today, months, stats: stats.update(rows_requalified=5))
+    monkeypatch.setattr(run, "bump_data_version", bumped.append)
+    monkeypatch.setattr(run, "get_settings",
+                        lambda: Settings(_env_file=None, cache_enabled=True, redis_url="redis://example"))
+    assert run.main(["schemes", "--year", "2026", "--month", "9"]) == 0
+    assert bumped == ["redis://example"]
+
+
+def test_compact_waits_for_a_running_load(monkeypatch, no_wait):
+    monkeypatch.setattr(run, "take_loader_lock", lambda *a, **k: False)
+    assert run.main(["compact"]) == 1

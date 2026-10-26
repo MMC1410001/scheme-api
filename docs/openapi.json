@@ -189,7 +189,7 @@
           "schemes"
         ],
         "summary": "API 1: a dealer's scheme rows for the requested month",
-        "description": "The dealer's EB SLAB 1-3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02 and EB FULL MONTH rows\nfor the given month and year, ordered by end date (the API template's order).\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Each component comes back once per start date: SAP's newest update,\neven if SAP changed the end date or re-issued the scheme under a new agreement number.\nReturns an empty list when the dealer has no data for that month.",
+        "description": "The dealer's scheme rows for the given month and year: every component SAP sends (EB SLAB 1-3,\nVALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02, EB FULL MONTH and the others), ordered by\nClearCut, highest first (empty ClearCut last). Rows with the same ClearCut keep the API template's\norder: by end date, then the 10 in template order, then other components by name.\n\nA row belongs to every month its validity period overlaps (rows without dates: the GCS month\nfolder its file came from). Each component comes back once per start date: SAP's newest update,\neven if SAP changed the end date or re-issued the scheme under a new agreement number.\nOnly the current month and the two before it are kept; older months return an empty list.\nReturns an empty list when the dealer has no data for that month.\n\nQualification is GSR for EB (EB SLAB 1-3; EB FULL MONTH takes GSR (B)), Value (VALUE, VALUE %,\nVALUE FA), ROLLER, SANDPAPER and MASKING TAPE, and invoiced quantity (Q) for every other component.\nRows of components outside the 10 also carry QualificationBasis (\"GSR\" or \"INVOICE_QTY\", what\nQualification holds) and InvoicedQty (Invoiced Quantity (Q)); rows of the 10 have neither.",
         "operationId": "month_schemes_v1_schemes_current_month_post",
         "requestBody": {
           "content": {
@@ -256,20 +256,22 @@
                 },
                 "examples": {
                   "rows": {
-                    "summary": "Dealer with data (3 of the 10 components shown)",
+                    "summary": "Dealer with data, by ClearCut highest first (3 of the 10 components and two others shown)",
                     "value": [
                       {
                         "Customer": "6100000001",
                         "FromDate": "2026-10-01",
-                        "ToDate": "2026-10-11",
-                        "ComponentDescription": "EB SLAB 1",
-                        "Qualification": 405232.86,
-                        "GsrB": 405232.86,
-                        "RebateRate": 0.75,
-                        "ClearCut": 0.0,
+                        "ToDate": "2026-10-31",
+                        "ComponentDescription": "ROLLER",
+                        "Qualification": 11350.0,
+                        "GsrB": 11350.0,
+                        "RebateRate": 26.0,
+                        "ClearCut": 2951.0,
                         "ShortfallAmount": 0.0,
                         "ShortfallPct": 0.0,
-                        "NextSlabRate": 1.0
+                        "NextSlabRate": 0.0,
+                        "QualificationBasis": "GSR",
+                        "InvoicedQty": 50.0
                       },
                       {
                         "Customer": "6100000001",
@@ -287,6 +289,19 @@
                       {
                         "Customer": "6100000001",
                         "FromDate": "2026-10-01",
+                        "ToDate": "2026-10-11",
+                        "ComponentDescription": "EB SLAB 1",
+                        "Qualification": 405232.86,
+                        "GsrB": 405232.86,
+                        "RebateRate": 0.75,
+                        "ClearCut": 0.0,
+                        "ShortfallAmount": 0.0,
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 1.0
+                      },
+                      {
+                        "Customer": "6100000001",
+                        "FromDate": "2026-10-01",
                         "ToDate": "2026-10-31",
                         "ComponentDescription": "EB FULL MONTH",
                         "Qualification": 405232.86,
@@ -296,6 +311,21 @@
                         "ShortfallAmount": 0.0,
                         "ShortfallPct": 0.0,
                         "NextSlabRate": 0.0
+                      },
+                      {
+                        "Customer": "6100000001",
+                        "FromDate": "2026-10-01",
+                        "ToDate": "2026-10-31",
+                        "ComponentDescription": "ALWD EB2",
+                        "Qualification": 12.5,
+                        "GsrB": 405232.86,
+                        "RebateRate": 1.0,
+                        "ClearCut": 0.0,
+                        "ShortfallAmount": 0.0,
+                        "ShortfallPct": 0.0,
+                        "NextSlabRate": 0.0,
+                        "QualificationBasis": "INVOICE_QTY",
+                        "InvoicedQty": 12.5
                       }
                     ]
                   },
@@ -450,15 +480,31 @@
         "operationId": "health_health_get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The API is up and its database answers",
             "content": {
               "application/json": {
+                "schema": {},
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database did not answer within 2 seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait",
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Health Health Get"
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "detail": "Database unreachable"
                 }
               }
             }
@@ -578,6 +624,7 @@
           "ComponentDescription": {
             "type": "string",
             "title": "Componentdescription",
+            "description": "SAP Comp desc: the 10 template components first, then any other component SAP sends",
             "examples": [
               "EB SLAB 1"
             ]
@@ -592,7 +639,7 @@
               }
             ],
             "title": "Qualification",
-            "description": "GSR for EB and Value (GSR (Q); for EB FULL MONTH, GSR (B)); invoiced quantity (Q) for Luxury and Premium"
+            "description": "GSR (Q) for EB, Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE (for EB FULL MONTH, GSR (B)); invoiced quantity (Q) for every other component"
           },
           "GsrB": {
             "anyOf": [
@@ -660,6 +707,36 @@
             ],
             "title": "Nextslabrate",
             "description": "Rebate rate of the next slab (SAP Next Slab Rate)"
+          },
+          "QualificationBasis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualificationbasis",
+            "description": "Only for components outside the 10 template ones: what Qualification holds, GSR (GSR (Q); ROLLER, SANDPAPER, MASKING TAPE) or INVOICE_QTY (invoiced quantity (Q); the others). Not sent for the 10.",
+            "examples": [
+              "INVOICE_QTY"
+            ]
+          },
+          "InvoicedQty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoicedqty",
+            "description": "Only for components outside the 10 template ones: SAP Invoiced Quantity (Q) (equal to Qualification when QualificationBasis is INVOICE_QTY). Not sent for the 10.",
+            "examples": [
+              50.0
+            ]
           }
         },
         "type": "object",

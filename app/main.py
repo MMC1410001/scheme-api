@@ -2,7 +2,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import psycopg
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg_pool import PoolTimeout
@@ -10,15 +11,20 @@ from psycopg_pool import PoolTimeout
 from app import cache, db
 from app.config import APP_ENV, get_settings
 from app.docs import docs_router
+from app.logfile import log_to_file
 from app.middleware import (
     SECURITY_HEADERS, BodySizeLimitMiddleware, LenientJsonNumbersMiddleware, SecurityHeadersMiddleware,
 )
+from app.openapi_examples import HEALTH_RESPONSES
 from app.ratelimit import RateLimitMiddleware
+from app.repository import Repository, get_repository
 from app.routes import router
-from app.scheduler import LoaderScheduler
+from app.scheduler import LoaderScheduler, log_schedule_off
 from app.security import TOKEN_URL, auth_router, config_problems
 
 log = logging.getLogger("app")
+# /health gives up on the database after this long, inside the usual 5 s probe timeout.
+HEALTH_DB_TIMEOUT_SECONDS = 2.0
 
 
 @asynccontextmanager
@@ -28,6 +34,8 @@ async def lifespan(app: FastAPI):
     scheduler = LoaderScheduler(settings) if settings.loader_schedule_on else None
     if scheduler:
         scheduler.start()
+    else:
+        log_schedule_off(settings)
     yield
     if scheduler:
         await scheduler.stop()
@@ -36,6 +44,7 @@ async def lifespan(app: FastAPI):
 
 
 settings = get_settings()
+log_to_file(settings)
 # Auth is off only on a developer's machine (APP_ENV=local set explicitly) with no auth settings; a
 # deploy that forgets APP_ENV refuses to start rather than run open. Anywhere else, or once any auth
 # setting is given, it must be complete and strong or the API refuses to start. The published
@@ -102,9 +111,17 @@ async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=500, content={"detail": "Internal server error"}, headers=SECURITY_HEADERS)
 
 
-@app.get("/health", tags=["health"])
-def health() -> dict[str, bool]:
-    return {"ok": True}
+@app.get("/health", tags=["health"], responses=HEALTH_RESPONSES)
+def health(repo: Repository = Depends(get_repository)) -> JSONResponse:
+    # Checks the database too: a deploy that can't reach it fails its health check instead of
+    # passing it and then answering 503 to every data request.
+    try:
+        repo.ping(HEALTH_DB_TIMEOUT_SECONDS)
+    except (PoolTimeout, psycopg.Error):
+        log.warning("Health check: database unreachable")
+        return JSONResponse(status_code=503, content={"ok": False, "detail": "Database unreachable"},
+                            headers={"Retry-After": "5"})
+    return JSONResponse(content={"ok": True})
 
 
 # Some load balancers probe with HEAD. Kept out of the OpenAPI spec, which documents GET only.

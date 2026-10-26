@@ -8,7 +8,7 @@ const {
 test.describe('Common', () => {
   const client = useClient();
 
-  test('COMMON_TC_1 GET /health returns 200 {ok: true} @functional', async () => {
+  test('COMMON_TC_1 GET /health returns 200 {ok: true} (API and database up) @functional', async () => {
     const response = await client().get('/health');
     expect(response.status()).toBe(200);
     expect(await response.json()).toEqual({ ok: true });

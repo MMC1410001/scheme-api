@@ -1,3 +1,4 @@
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -35,9 +36,16 @@ class FakeBlob:
 class FakeClient:
     made = []
     downloads = []
+    keys = []
 
     def __init__(self, project=None):
         FakeClient.made.append(threading.current_thread().name)
+        self.project = project
+
+    @classmethod
+    def from_service_account_info(cls, info, project=None):
+        cls.keys.append(info)
+        return cls(project=project or info.get("project_id"))
 
     def list_blobs(self, bucket, prefix):
         return [FakeBlob(f"{prefix}a.csv", 11), FakeBlob(f"{prefix}b.csv", 22), FakeBlob(f"{prefix}notes.txt", 33)]
@@ -56,6 +64,7 @@ def fake_gcs(monkeypatch):
 
     FakeClient.made.clear()
     FakeClient.downloads.clear()
+    FakeClient.keys.clear()
     monkeypatch.setattr(storage, "Client", FakeClient)
     monkeypatch.setattr(sources, "_clients", threading.local())
     return FakeClient
@@ -83,3 +92,22 @@ def test_each_thread_gets_its_own_gcs_client(fake_gcs):
         assert list(pool.map(read, files)) == [b"p/a.csv@11", b"p/b.csv@22"]
     reader_threads = {name for name in fake_gcs.made if name.startswith("read")}
     assert len(reader_threads) == 2  # one client per reading thread, none shared
+
+
+KEY = {"client_email": "loader@p.iam.gserviceaccount.com", "private_key": "-----BEGIN PRIVATE KEY-----", "project_id": "p"}
+
+
+def test_key_in_settings_makes_the_client_from_it(fake_gcs, monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setattr(sources, "get_settings", lambda: Settings(_env_file=None, gcs_credentials_json=json.dumps(KEY)))
+    assert sources._gcs_client().project == "p"  # the key's project unless GCS_PROJECT says otherwise
+    assert fake_gcs.keys == [KEY]
+
+
+def test_without_a_key_the_library_finds_the_credentials(fake_gcs, monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setattr(sources, "get_settings", lambda: Settings(_env_file=None, gcs_credentials_json=""))
+    assert sources._gcs_client().project == "<none>"
+    assert fake_gcs.keys == []

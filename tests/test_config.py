@@ -1,4 +1,6 @@
 """Settings come from .env.<APP_ENV> (default local); environment variables win over the file."""
+import base64
+import json
 import os
 import subprocess
 import sys
@@ -98,3 +100,22 @@ def test_a_bad_trusted_proxy_stops_the_api(monkeypatch):
 def test_api_refuses_to_run_open_when_app_env_is_unset(tmp_path):
     result = start_api(tmp_path)
     assert result.returncode != 0 and "APP_ENV is not set and there are no auth settings" in result.stderr
+
+
+KEY = {"client_email": "loader@p.iam.gserviceaccount.com", "private_key": "-----BEGIN PRIVATE KEY-----\nsecret\n"}
+
+
+@pytest.mark.parametrize("value", [base64.b64encode(json.dumps(KEY, indent=2).encode()).decode(), json.dumps(KEY)])
+def test_gcs_key_as_base64_or_json(value):
+    assert Settings(_env_file=None, gcs_credentials_json=value).gcs_credentials_info == KEY
+
+
+def test_gcs_key_empty_means_none():
+    assert Settings(_env_file=None, gcs_credentials_json="").gcs_credentials_info is None
+
+
+@pytest.mark.parametrize("value", ["not-base64!", base64.b64encode(b'{"type": "x"}').decode(), '{"private_key": "secret"}'])
+def test_bad_gcs_key_stops_start_up_without_showing_it(value):
+    with pytest.raises(ValueError, match="GCS_CREDENTIALS_JSON") as error:
+        Settings(_env_file=None, gcs_credentials_json=value)
+    assert "secret" not in str(error.value)

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Project | Scheme API (API 1: monthly schemes) |
-| Consumer | The client team |
-| Version | 0.11 (draft) — API 1 only; the API runs the loader itself once a day at 09:00 IST (with retries), so no separate cron job is needed (0.10: each component is returned once per start date, SAP's newest update; 0.9: components VALUE % and VALUE FA; 0.8: QA audit fixes: client IP from trusted proxies only (`TRUSTED_PROXIES`, start with `python -m app`), loader hardening, pinned Swagger UI; 0.7: the API refuses to start without auth when `APP_ENV` is unset; 0.6: OAuth2 client credentials + JWT Bearer tokens replace the `X-API-Key` header; 0.5: `NextSlabRate`, stricter month/year input, per-IP rate limit) |
-| Date | 16 October 2026 |
+| Consumer | Client team |
+| Version | 1.2 — API 1 (monthly schemes) |
+| Date | 26 October 2026 |
 | Author | Project team |
 | Status | API 1 built and tested on sample and real SAP data. |
 
@@ -40,6 +40,7 @@
 
 - A. Example API calls
 - B. Glossary
+- C. User guide: calling API 1
 
 **List of figures**
 
@@ -60,8 +61,8 @@ by dealer code.
 
 **In scope**
 
-- API 1 — a dealer's scheme position for a month the caller chooses (8 scheme components).
-- A scheduled job that loads the SAP exports from GCS into a database.
+- API 1 — a dealer's scheme position for a month the caller chooses (every SAP scheme component; the 10 template components as agreed).
+- A daily scheduled job that loads the SAP exports from GCS into a database.
 - Documentation, a Postman collection, and functional, performance and security testing.
 
 **Out of scope**
@@ -81,13 +82,14 @@ returns it to the client's systems on request.
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-1 | API 1 takes a dealer code, a month and a year in the request body and returns that dealer's scheme rows for that month. | Must |
-| FR-2 | API 1 returns only these 10 components: EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. All other SAP components are excluded. | Must |
+| FR-2 | API 1 returns every SAP component: the 10 agreed template ones (EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH) and all others. Rows of components outside the 10 also carry `QualificationBasis` (`GSR` or `INVOICE_QTY`, what `Qualification` holds) and `InvoicedQty` = Invoiced Quantity (Q). | Must |
 | FR-3 | API 1 returns the columns of the agreed API template (section 5). | Must |
 | FR-4 | EB slabs are returned as separate rows (one row per slab). | Must |
-| FR-5 | Qualification is the GSR value for EB and Value, and the invoiced quantity for Premium and Luxury. EB FULL MONTH follows the same GSR working as the EB slabs. | Must |
-| FR-6 | Rows are sorted by validity date. | Must |
-| FR-7 | Only the requested month's data is returned. A row belongs to every month its validity period (From–To) overlaps, whichever GCS folder its file came from; each component is returned once per start date (SAP's newest update, see A-5); rows without dates use their folder's month. The database keeps every month. | Must |
-| FR-8 | SAP exports are loaded from GCS automatically on a schedule (daily at 09:00 India time, run by the API itself; section 10). | Must |
+| FR-5 | Qualification is the GSR value for EB (EB SLAB 1–3, EB FULL MONTH), Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE, and the invoiced quantity for every other component, Luxury and Premium included (rule of 2026-10-22). EB FULL MONTH follows the same GSR working as the EB slabs. | Must |
+| FR-5a | Rows are ordered by Clear Cut, highest first (an empty Clear Cut last); rows with the same Clear Cut keep the template order (end date, the 10 in template order, then other components by name). Requested 2026-10-22. | Must |
+| FR-6 | Rows with the same Clear Cut are sorted by validity (end) date (FR-5a); until 2026-10-22 this was the main order. | Must |
+| FR-7 | Only the requested month's data is returned. A row belongs to every month its validity period (From–To) overlaps, whichever GCS folder its file came from; each component is returned once per start date (SAP's newest update, see A-5); rows without dates use their folder's month. The database keeps the current month and the two before it (A-24). | Must |
+| FR-8 | SAP exports are loaded from GCS automatically on a schedule (daily at 05:00 India time, run by the API itself; section 10). | Must |
 | FR-9 | Each daily file holds only that day's updates, so the API must show the latest version of every row across all of the month's files. | Must |
 | FR-10 | Dealer code and customer code are the same identifier. | Must |
 
@@ -102,7 +104,7 @@ returns it to the client's systems on request.
 | Format | CSV, one header row, 53 columns |
 | Size | Up to 50,000 rows per file; large exports are split into parts; about 550 files a month |
 | Content | Only the rows SAP updated on that day (not a full snapshot); one file contains many dealers |
-| Components | 66 different components ("Comp desc"); 10 are used |
+| Components | 66 different components ("Comp desc") in the Aug sample; 152 in the Sep 2026 folder and 102 in Oct 2026 (186 names in all, only 70 in both months: SAP renames and adds schemes monthly). All are stored and returned; 10 have agreed qualification rules |
 | Row identity | Customer + Agreement + Deal Suffix + validity period (Valid from, To) |
 | Dates | DD/MM/YYYY (DD.MM.YYYY and DD-MM-YYYY are also read); empty dates appear as 00/00/0000 |
 | Numbers | Trailing spaces; negative numbers have the minus sign at the end, e.g. `882.00-` |
@@ -113,10 +115,10 @@ SAP columns used by API 1:
 |---|---|
 | Customer | Dealer code |
 | Agreement, Deal Suffix | Row identity |
-| Comp desc | Component name (filter to the 10 components) |
+| Comp desc | Component name (the 10 template components have agreed qualification rules) |
 | Valid from, To | Validity period |
-| GSR (Q) | Qualification for EB SLAB 1–3 and Value (VALUE, VALUE %, VALUE FA) |
-| Invoiced Quantity(Q) | Qualification for Luxury and Premium |
+| GSR (Q) | Qualification for EB SLAB 1–3, Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE |
+| Invoiced Quantity(Q) | Qualification for every other component (Luxury, Premium and the rest); `InvoicedQty` on components outside the 10 |
 | GSR (B) | GSR B |
 | Rebate Rate | Rebate rate |
 | Clear Cut CN | Clear cut |
@@ -130,7 +132,7 @@ SAP columns used by API 1:
 
 ### 5.1 API 1 — response template
 
-One row per component: the columns of the agreed API template, then `NextSlabRate` (requested 2026-10-15) as the last field:
+One row per component: the columns of the agreed API template, then `NextSlabRate` (requested 2026-10-15). Rows of components outside the 10 also carry `QualificationBasis` and `InvoicedQty` (section 12.2):
 
 | Template column | API field | Type |
 |---|---|---|
@@ -153,7 +155,7 @@ One row per component: the columns of the agreed API template, then `NextSlabRat
 | NFR-1 | Performance | Response time at expected load (150 concurrent users) | p95 < 500 ms, p99 < 1 s, errors < 1% |
 | NFR-8 | Performance | Peak load from the dealer app: planned 600 requests a minute, observed up to 1 lakh a minute | 1,700 requests/s with < 1% errors; Redis response cache (section 17.1) |
 | NFR-2 | Availability | When overloaded, fail fast with a retryable response instead of hanging | 503 with Retry-After within 5 s |
-| NFR-3 | Freshness | New SAP exports appear in the API without manual steps | Same day: loaded at 09:00 IST (SAP's files land around 04:30–05:00) |
+| NFR-3 | Freshness | New SAP exports appear in the API without manual steps | Same day: loaded at 05:00 IST (SAP's files land around 04:30–04:51) |
 | NFR-4 | Security | Protected against OWASP API Top 10 risks; no data leakage in errors | No ZAP failures, no bandit findings, no known CVEs |
 | NFR-5 | Auditability | Every stored row keeps its original SAP values and source file name | Raw row stored with each record |
 | NFR-6 | Reliability | Re-running the job or loading files out of order never produces wrong data | Idempotent loads; newest update wins |
@@ -165,29 +167,32 @@ These assumptions were made while building the solution. Please confirm or corre
 
 | ID | Assumption | Basis |
 |---|---|---|
-| A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as `1`–`9`, `01`–`09`, `10`, `11` or `12`; longer forms such as `010` or `0010` are rejected). A month whose SAP exports have not been loaded returns an empty list. The scheduled loader loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month) |
-| A-2 | A row belongs to every month its validity period overlaps, not to the folder its file is in. Changed 2026-10-15: dev data showed the September folder also holds SAP updates of August schemes, so the folder rule returned August rows for September. A scheme running across two months is reported in both. | Decided 2026-10-15 (was: folder month) |
+| A-1 | The caller (the client) chooses the month: `month` 1–12 and `year` 2000–2100, as JSON numbers or numeric strings (month as `1`–`9`, `01`–`09`, `10`, `11` or `12`; longer forms such as `010` or `0010` are rejected). A month whose SAP exports have not been loaded returns an empty list. The scheduled loader loads the current month, decided in India time (Asia/Kolkata); earlier months are loaded once with `ingestion.run schemes --year --month`. | Team decision (the client sends the month); confirmed 2026-10-21: any month may be requested, and its data is returned if present |
+| A-2 | A row belongs to every month its validity period overlaps, not to the folder its file is in. Changed 2026-10-15: dev data showed the September folder also holds SAP updates of August schemes, so the folder rule returned August rows for September. A scheme running across two months is reported in both. A month's full report arrives around the 1st of the next month, in the next month's folder (August's on 1 September). | Decided 2026-10-15 (was: folder month); full-month report timing confirmed 2026-10-21 |
 | A-3 | The API template's date headers are swapped (the column labelled "To Date" holds start dates). The API returns `FromDate` = SAP "Valid from" and `ToDate` = SAP "To". | Template sample values |
 | A-4 | The template is the final output, plus `NextSlabRate` (SAP "Next Slab Rate"), added after it as the last field of each row on 2026-10-15. Prepaid rate and customer name (from the first discussion) are not returned; "Rebate rate" is taken to be the rate that was meant. | Template confirmed; next slab rate requested 2026-10-15 |
-| A-5 | A row is identified by Customer + Agreement + Deal Suffix + validity period (within a GCS month folder). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. The API returns one row per component and start date (Valid From): the one with the newest "Last Updated" (then the newer folder, then the higher agreement number). So when SAP corrects a row's end date (dev, Sept 2026: EB SLAB 2 1–18 Sep, then 1–19 Sep) or re-issues a dealer's schemes under a new agreement number with the same dates, only the newest version is returned; older versions stay stored (decided 2026-10-16; replaces the 2026-10-15 rule that returned every stored period). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme (e.g. EB SLAB 2 1–18 Aug, EB SLAB 3 1–25 Aug), not moved daily; reviewed 2026-10-15 |
+| A-5 | A row is identified by Customer + Agreement + Deal Suffix + Component + validity period (within a GCS month folder; the component joined the key 2026-10-19, as SAP can give two components the same suffix and period). The version with the newest "Last Updated Date/Time" is kept; with equal timestamps the file loaded later wins. The period is part of the key so a month folder can hold the same agreement and suffix for two periods (e.g. a late update of last month's scheme) without one replacing the other. The API returns one row per component and start date (Valid From): the one with the newest "Last Updated" (then the newer folder, then the higher agreement number). So when SAP corrects a row's end date (dev, Sept 2026: EB SLAB 2 1–18 Sep, then 1–19 Sep) or re-issues a dealer's schemes under a new agreement number with the same dates, only the newest version is returned (decided 2026-10-16; replaces the 2026-10-15 rule that returned every stored period). The loader deletes the older versions, so the database holds one row per dealer, component and start date (decided 2026-10-19, A-25). Agreement and deal suffix are compared as SAP writes them (zero-padded); `0010` and `10` are not treated as the same (decided 2026-10-16). | Sample file analysis: validity periods are fixed per scheme (e.g. EB SLAB 2 1–18 Aug, EB SLAB 3 1–25 Aug), not moved daily; reviewed 2026-10-15 |
 | A-6 | "Last Updated" times from SAP use one time zone and can be compared across files. | Single SAP system |
-| A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). If SAP renames a component, the list in `app/constants.py` must be updated. | Look-alikes such as `ALWD EB2`, `ADDTNL PREMIUM 01`, `VALUE SCH %` and `VALUE SCH FA` must be excluded. `VALUE %` and `VALUE FA` added on request (2026-10-16); both spellings found in the Sep/Oct 2026 SAP data |
-| A-8 | Qualification uses GSR (Q) for EB SLAB 1–3, VALUE, VALUE % and VALUE FA, and Invoiced Quantity (Q) for LUXURY, PREMIUM 01 and PREMIUM 02. EB FULL MONTH follows the EB slab working: SAP leaves its GSR (Q) empty, and on slab rows GSR (Q) always equals GSR (B), so its Qualification is GSR (B). Real sample: GSR (Q) = GSR (B) on 775 of 775 slab rows; GSR (Q) empty on all 774 EB FULL MONTH rows. VALUE % and VALUE FA follow VALUE (confirmed 2026-10-16); in the Sep/Oct 2026 SAP data their GSR (Q) is filled on 99% of rows, as on VALUE. | Discussion and template values |
+| A-7 | Component names are matched exactly as SAP spells them (e.g. `PREMIUM 01`). Every component is stored under its own name, so a renamed or new component is loaded and returned without a code change. Only the 10 template components (`app/constants.py`) need a code change if SAP renames one of them. SAP can give two components the same agreement, deal suffix and period (Oct 2026: ALWD FULL MONTH and ADDN TEXTURE PER 250, suffix 65), so the component is part of the row key. | Look-alikes such as `ALWD EB2`, `ADDTNL PREMIUM 01`, `VALUE SCH %` and `VALUE SCH FA` must be excluded. `VALUE %` and `VALUE FA` added on request (2026-10-16); both spellings found in the Sep/Oct 2026 SAP data |
+| A-8 | Qualification uses GSR (Q) for EB SLAB 1–3, VALUE, VALUE %, VALUE FA, ROLLER, SANDPAPER and MASKING TAPE, and Invoiced Quantity (Q) for every other component (LUXURY, PREMIUM 01/02 and the rest; rule of 2026-10-22). Names match SAP's Comp desc exactly, so look-alikes such as ALWD EB2, EB ADD FA 02 or ALWD VALUE SCH are on invoiced quantity. EB FULL MONTH follows the EB slab working: SAP leaves its GSR (Q) empty, and on slab rows GSR (Q) always equals GSR (B), so its Qualification is GSR (B). Real sample: GSR (Q) = GSR (B) on 775 of 775 slab rows; GSR (Q) empty on all 774 EB FULL MONTH rows. VALUE % and VALUE FA follow VALUE (confirmed 2026-10-16); in the Sep/Oct 2026 SAP data their GSR (Q) is filled on 99% of rows, as on VALUE. | Discussion and template values; rule for the other components confirmed 2026-10-22 |
 | A-9 | Dealer codes are compared without leading zeros (`0006100000001` = `6100000001`) and contain only letters and digits, at most 20 characters. | SAP pads codes with zeros |
 | A-10 | If a dealer has more than one agreement, one row per agreement per component is returned. The sample data has one agreement per dealer. | Sample file analysis |
-| A-11 | An unknown dealer, or a dealer without data in the requested month, returns `200` with an empty list, not `404`. | Simplest for consumers |
-| A-12 | The API uses `POST` with a JSON body, and response fields use PascalCase like the existing dealer APIs. | Discussion; existing Acme APIs |
+| A-11 | An unknown dealer, or a dealer without data in the requested month, returns `200` with an empty list, not `404`. | Simplest for consumers; confirmed 2026-10-21 |
+| A-12 | The API uses `POST` with a JSON body, and response fields use PascalCase like the existing Acme dealer APIs. | Discussion; existing Acme APIs |
 | A-13 | SAP exports are in bucket `acme-scheme-files`, folder `sap-exports/<year>/<month>/` (confirmed: `sap-exports/2026/10`). Folders for January–September are assumed to be `01`–`09`; the job also reads `1`–`9`, so if both exist neither is missed (changed 2026-10-16: it used to stop at the first one). | Path confirmed; QA audit 2026-10-16 |
 | A-14 | Callers authenticate with OAuth2 client credentials: each caller (the client, QA) gets a `client_id` and `client_secret` per environment, exchanges them at `POST /v1/auth/token` for a JWT Bearer token valid for 1 hour, and reuses it until shortly before it expires. Outside local development the API does not start without auth settings; auth can be off only when `APP_ENV=local` is set explicitly, so a server that forgets `APP_ENV` does not run open. Locally the client is `local-client` / `local-test-secret` (matching the Postman Local environment); these published values are accepted only with `APP_ENV=local` set explicitly (added 2026-10-16), so a server that forgets `APP_ENV` cannot run on them either. The `X-API-Key` header is no longer accepted. | Decided 2026-10-15 (was: optional `X-API-Key`); security review (explicit `APP_ENV=local` for auth off: security review of 15 October 2026) |
 | A-15 | The project team's existing PostgreSQL database is used. A separate database can be created quickly if needed. | Decision in discussion |
-| A-16 | The loader runs once a day at 09:00 IST (team decision 2026-10-19); SAP exports arrive once a day (in October 2026 about 23 files around 04:30–04:50 IST), so data is up to date from 09:00. | ~550 files a month |
+| A-16 | The loader runs once a day at 05:00 IST (team decision 2026-10-19 for 09:00, moved to 05:00 on 2026-10-21); SAP exports arrive once a day (in October 2026 about 23 files between 04:30 and 04:51 IST), so data is up to date from 05:00. Files that land after 05:00 wait for the next day's run. | ~550 files a month |
 | A-17 | HTTPS termination is provided by the hosting gateway or load balancer. The API itself limits each client IP to 2,500 requests a second (added 2026-10-15). The proxy appends the caller's IP to `X-Forwarded-For`, and its address is listed in `TRUSTED_PROXIES`; `X-Forwarded-For` from any other address is ignored, so a caller cannot choose its own IP (changed 2026-10-16). | Standard deployment; rate limit requested 2026-10-15; QA audit 2026-10-16 |
-| A-18 | Expected load is modelled as 150 concurrent users, as in the existing dealer API tests. Actual client call volumes are not known. | Existing test practice |
+| A-18 | Expected load is modelled as 150 concurrent users, as in the existing Acme dealer API tests. Actual client call volumes are not known. | Existing test practice |
 | A-19 | Only `.csv` and `.xlsx` files are loaded from GCS. | Formats seen so far |
-| A-20 | EB amounts are running totals from the 1st of the month: EB SLAB 1 (e.g. 1–10 Oct, 10 lakh) is included in EB SLAB 2 (1–15 Oct, 12 lakh), so 2 lakh were added, not 22 lakh in total. The API returns each row as SAP sends it and never adds rows together; a newer SAP update of the same row replaces it. Consumers must not sum the slabs. | Confirmed by the team; real sample: EB amounts never decrease from slab to slab (every dealer checked) |
+| A-20 | EB amounts are running totals from the 1st of the month: EB SLAB 1 (e.g. 1–10 Oct, 10 lakh) is included in EB SLAB 2 (1–15 Oct, 12 lakh), so 2 lakh were added, not 22 lakh in total. The API returns each row as SAP sends it and never adds rows together; a newer SAP update of the same row replaces it. Consumers must not sum the slabs. | Confirmed by the team; real sample: EB amounts never decrease from slab to slab (775 of 775 dealers) |
 | A-21 | A row with no end date ("To" empty) counts as valid for its start day only, so it is returned only for the month of its "Valid from". | Confirmed correct 2026-10-16 |
 | A-22 | SAP dates use `/`, `.` or `-` between day, month and year. Dates written with spaces (`01 08 2026`) are not read: such a row is bad and its file is marked failed. | Decided 2026-10-16 (not supported for now) |
 | A-23 | Amounts are finite numbers. `NaN` or `Infinity` in an amount column makes the row bad instead of being stored. | QA audit 2026-10-16 |
+| A-24 | Only the current month and the two before it are kept (`LOADER_RETENTION_MONTHS` = 3; in October: October, September, August). A scheme is deleted once its period ended before the oldest kept month: judged by its end date, so a scheme that started earlier but runs into a kept month stays. A row without an end date counts as its start day (A-21); a row without dates by its folder month. Older months return no rows. | Decided 2026-10-19; M-2 as the oldest month shown confirmed 2026-10-21 |
+| A-25 | One row per dealer, component and start date is stored: the version API 1 returns (A-5). Older versions are deleted, also when SAP re-issued the scheme under another agreement number or corrected its end date. With equal "Last Updated", folder and agreement, the later end date is kept (no end date counts as the earliest), then the higher deal suffix. A deleted version comes back only by reloading its month from GCS (`--reload`), where it again loses to the newer one. | Decided 2026-10-19 |
+| A-26 | Every value of the SAP row is kept in the database (`raw`), zeros and empty values included, so data can be checked without re-reading GCS; only the repeated column names are stored once (`raw_layouts`, view `scheme_records_raw`). Postgres compression was tried and does not apply: it compresses only rows over about 2 KB, and these are about 1.6 KB. | Decided 2026-10-19 |
 
 # Part B — Solution
 
@@ -195,7 +200,7 @@ These assumptions were made while building the solution. Please confirm or corre
 
 The solution has two parts that share a PostgreSQL database:
 
-1. **Ingestion job (run by the API daily at 09:00 IST).** Lists new files in GCS, validates and parses them, and stores the
+1. **Ingestion job (run by the API daily at 05:00 IST).** Lists new files in GCS, validates and parses them, and stores the
    latest version of each scheme row. Files already loaded are skipped.
 2. **API service (FastAPI).** Answers dealer lookups from the database. Each request is a single
    indexed query, so responses are fast and do not depend on file sizes.
@@ -219,11 +224,9 @@ cannot break the API.
 
 ## 10. Data ingestion design
 
-The API runs `python -m ingestion.run schemes` itself (`app/scheduler.py`); no cron job is needed.
-Until 2026-10-19 the design relied on a cron job that was never set up on dev, so new files were loaded
-only by manual runs.
+The API runs `python -m ingestion.run schemes` itself (`app/scheduler.py`); no separate cron job is needed.
 
-- **When:** once a day at `LOADER_DAILY_AT` (09:00 India time). On days 1–3 of a month
+- **When:** once a day at `LOADER_DAILY_AT` (05:00 India time). On days 1–3 of a month
   (`LOADER_CATCH_UP_DAYS`) the previous month is loaded too, so files of its last day are not missed.
   A restart does not trigger a load.
 - **Isolation:** each run is a child process, so a slow or failing load never blocks API requests.
@@ -232,7 +235,7 @@ only by manual runs.
 - **Failures:** a failed run (GCS or database down, bad file, longer than `LOADER_TIMEOUT_MINUTES` =
   120) is logged at ERROR and tried again up to `LOADER_RETRIES` (3) times, `LOADER_RETRY_MINUTES` (30)
   apart, carrying on from the files already loaded. If all tries fail, the next is the next day at
-  09:00, or the loader can be run by hand.
+  05:00, or the loader can be run by hand.
 - **Switch:** on everywhere except `APP_ENV=local`; `LOADER_SCHEDULE_ENABLED=false` turns it off where
   a cron job runs the loader instead.
 
@@ -250,8 +253,32 @@ Key design points:
 - **Skip loaded files.** Each loaded file is recorded with its GCS version ("generation"). An
   unchanged file is skipped; a re-uploaded file is loaded again.
 - **Upsert, newest wins.** Rows are inserted or updated by Customer + Agreement + Deal Suffix +
-  validity period. An existing row is replaced only if the new one has a newer or equal
-  "Last Updated" time, so files can arrive in any order.
+  Component + validity period. An existing row is replaced only if the new one has a newer or equal
+  "Last Updated" time, so files can arrive in any order. A row SAP sends again unchanged is not
+  rewritten.
+- **One row per scheme.** In the same transaction, every older version of the schemes in the file
+  is deleted: per dealer, component and start date only the version API 1 returns is kept (A-5,
+  A-25), whatever the agreement, end date or folder. Only the schemes in the file are checked, through
+  the dealer index. Versions stored before this existed are deleted once, at the end of the first
+  run after the upgrade (recorded in `loader_maintenance`).
+- **Compact raw row.** Every value of the SAP row is kept in `raw` (A-26), but the 54 column names,
+  half of each row, are stored once per file layout in `raw_layouts`. Rows stored by an earlier
+  loader version are rewritten once by the first run after the upgrade (no value changes; checked row by row in tests).
+  Real SAP rows: `raw` 1,399 → 483 bytes; table 7.9 MB → 3 MB for one 4,649-row file. The space
+  freed is reused by new rows; `python -m ingestion.run compact` (`VACUUM FULL`) gives it back to the
+  disk, locking the table for its duration (about 2.5 s per 200,000 rows), so run it at a quiet time.
+- **Qualification rule of 2026-10-22.** The loader stores `Qualification` by the rule in FR-5. Rows
+  stored before it (components outside the 10 on GSR (Q)) are corrected once by the first run after
+  the upgrade: `Qualification` = the stored invoiced quantity for every component outside the GSR list,
+  recorded in `loader_maintenance`. It works 2,000 dealers at a time, with a `VACUUM` after each
+  batch, so the rewritten rows reuse the old rows' space instead of growing the table (dev: 5.8 of
+  6.8 million rows to rewrite); a stopped run carries on where it left off. Rows that already hold
+  it are not rewritten. Checked on the real 16 Aug SAP file: 43,029 of 50,000 rows corrected, and the table
+  after the upgrade is identical, row for row, to a fresh load by the new loader.
+- **Retention.** At the end of each run, schemes that ended before the oldest kept month are
+  deleted (`LOADER_RETENTION_MONTHS` = 3: the current month and the two before it, A-24), and the table
+  is vacuumed after a delete. Files of older months stay listed in `ingested_files`, so they are not
+  loaded again.
 - **One transaction per file.** A file is either fully loaded or not at all.
 - **Unreadable rows.** A row that can't be read (bad date or number) is skipped and logged. Its file
   is read once more; if rows are still bad, the file's good rows are loaded and the file is recorded
@@ -281,7 +308,7 @@ Key design points:
 - **Summary log.** Each run logs files loaded/skipped/failed and rows loaded/dropped/bad, and exits
   with code 1 if any file failed (so the scheduler can alert).
 
-Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 13 seconds.
+Performance: a 50,000-row SAP file is saved in about 2 seconds, deleting its older versions included (1.4 s without); 160,000 rows in 13 seconds. The one-off clean-up of 300,000 stored rows (86,000 older versions, 13,000 expired) took under 2 seconds on a laptop.
 
 ## 11. Data model
 
@@ -289,8 +316,14 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 
 | Table | Purpose | Key |
 |---|---|---|
-| `scheme_records` | Latest version of each SAP scheme row for API 1, plus the original row as JSON | year, month, dealer_code, agreement, deal_suffix, valid_from, valid_to (unique index; empty dates count as equal) |
+| `scheme_records` | One row per dealer, component and start date (SAP's newest version) for the kept months, plus every value of the original SAP row (`raw`, values only, in file order; `raw_layout` names the columns) | year, month, dealer_code, agreement, deal_suffix, component, valid_from, valid_to (unique index; empty dates count as equal) |
 | `ingested_files` | Which files have been loaded, their GCS version, row count, status (`loaded` / `failed`) and bad-row count | kind + gcs_path |
+| `raw_layouts` | The column names of SAP files, stored once instead of in every row (`columns`, in file order) | id; columns unique |
+| `loader_maintenance` | One-off clean-ups the loader has done (e.g. deleting older versions stored by an earlier loader version), so each runs once | name |
+
+The view `scheme_records_raw` shows each row with `raw` as name → value, exactly as SAP sent it
+(zeros and empty values included), for checking data by hand:
+`SELECT raw->>'remarks' FROM scheme_records_raw WHERE dealer_code = '6100000001';`
 
 `python -m ingestion.run init-db` creates the tables and upgrades older databases in place.
 
@@ -314,7 +347,7 @@ Performance: a 50,000-row SAP file loads in about 1.6 seconds; 160,000 rows in 1
 |---|---|---|---|
 | POST | `/v1/auth/token` | Get an access token (`grant_type=client_credentials`) | Client credentials (HTTP Basic or body) |
 | POST | `/v1/schemes/current-month` | API 1 — dealer's scheme rows for the requested month | Bearer token |
-| GET | `/health` | Liveness check, returns `{"ok": true}` | None |
+| GET | `/health` | Health check: 200 `{"ok": true}` when the API and its database are up; 503 `{"ok": false}` when the database does not answer within 2 s | None |
 
 ### 12.1 Request body
 
@@ -339,20 +372,22 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
 
-**Example response — `200 OK`** (sample dealer; all 10 components)
+**Example response — `200 OK`** (sample dealer: the 10 template components and two others, ROLLER and ALWD EB2; highest `ClearCut` first)
 
 ```json
 [
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "ROLLER", "Qualification": 11350.0, "GsrB": 11350.0, "RebateRate": 26.0, "ClearCut": 2951.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0, "QualificationBasis": "GSR", "InvoicedQty": 50.0},
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "LUXURY", "Qualification": 315.1, "GsrB": 159292.8, "RebateRate": 1.0, "ClearCut": 1592.93, "ShortfallAmount": 84.9, "ShortfallPct": 21.23, "NextSlabRate": 1.5},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-11", "ComponentDescription": "EB SLAB 1", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-18", "ComponentDescription": "EB SLAB 2", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-25", "ComponentDescription": "EB SLAB 3", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.75, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 1.25},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE %", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.5, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "VALUE FA", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 0.25, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
-  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "LUXURY", "Qualification": 315.1, "GsrB": 159292.8, "RebateRate": 1.0, "ClearCut": 1592.93, "ShortfallAmount": 84.9, "ShortfallPct": 21.23, "NextSlabRate": 1.5},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "PREMIUM 01", "Qualification": 0.0, "GsrB": 0.0, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 40.0, "ShortfallPct": 100.0, "NextSlabRate": 0.0},
   {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "PREMIUM 02", "Qualification": 0.0, "GsrB": 0.0, "RebateRate": 0.0, "ClearCut": 0.0, "ShortfallAmount": 8.0, "ShortfallPct": 100.0, "NextSlabRate": 0.0},
-  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "EB FULL MONTH", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 2.25, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0}
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "EB FULL MONTH", "Qualification": 405232.86, "GsrB": 405232.86, "RebateRate": 2.25, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0},
+  {"Customer": "6100000001", "FromDate": "2026-10-01", "ToDate": "2026-10-31", "ComponentDescription": "ALWD EB2", "Qualification": 12.5, "GsrB": 405232.86, "RebateRate": 1.0, "ClearCut": 0.0, "ShortfallAmount": 0.0, "ShortfallPct": 0.0, "NextSlabRate": 0.0, "QualificationBasis": "INVOICE_QTY", "InvoicedQty": 12.5}
 ]
 ```
 
@@ -363,17 +398,20 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
 | `Customer` | string | Dealer code | Customer |
 | `FromDate` | date | Start of validity | Valid from |
 | `ToDate` | date | End of validity | To |
-| `ComponentDescription` | string | One of the 10 components | Comp desc |
-| `Qualification` | number | GSR (EB, Value) or invoiced quantity (Luxury, Premium) | GSR (Q); GSR (B) for EB FULL MONTH; Invoiced Quantity(Q) |
+| `ComponentDescription` | string | Component name as SAP spells it | Comp desc |
+| `Qualification` | number | GSR (EB, Value, ROLLER, SANDPAPER, MASKING TAPE) or invoiced quantity (every other component, Luxury and Premium included) | GSR (Q); GSR (B) for EB FULL MONTH; Invoiced Quantity(Q) |
 | `GsrB` | number | Gross Sales Revenue for the benefit | GSR (B) |
 | `RebateRate` | number | Rebate rate | Rebate Rate |
 | `ClearCut` | number | Clear-cut credit note amount | Clear Cut CN |
 | `ShortfallAmount` | number | Shortfall to the next slab | Short Fall |
 | `ShortfallPct` | number | Shortfall as a percentage | Short Fall % |
 | `NextSlabRate` | number | Rebate rate of the next slab | Next Slab Rate |
+| `QualificationBasis` | string | Only on components outside the 10: what `Qualification` holds, `GSR` (ROLLER, SANDPAPER, MASKING TAPE) or `INVOICE_QTY` (the others) | — |
+| `InvoicedQty` | number | Only on components outside the 10: invoiced quantity (equal to `Qualification` when `QualificationBasis` is `INVOICE_QTY`) | Invoiced Quantity (Q) |
 
-Ordering: by `ToDate`, then in the order EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA,
-LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH. Amounts can be negative or `null`.
+Ordering: by `ClearCut`, highest first (an empty `ClearCut` last). Rows with the same `ClearCut` (most
+are 0): by `ToDate`, then in the order EB SLAB 1, EB SLAB 2, EB SLAB 3, VALUE, VALUE %, VALUE FA,
+LUXURY, PREMIUM 01, PREMIUM 02, EB FULL MONTH, then the other components by name. Amounts can be negative or `null`.
 
 ### 12.3 Authentication — `POST /v1/auth/token`
 
@@ -483,6 +521,7 @@ are available for per-environment releases.
 | `DB_POOL_MAX` | `10` | DB connections per worker process |
 | `GCS_BUCKET` | `acme-scheme-files` | Bucket with the files |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | Service-account key file for GCS |
+| `GCS_CREDENTIALS_JSON` | — | The GCS service-account key itself (base64 of the key file, one line), instead of a mounted file; wins over `GOOGLE_APPLICATION_CREDENTIALS`. Dev: service account `scheme-loader@example-project.iam.gserviceaccount.com` |
 | `GCS_PROJECT` | — | Optional Google Cloud project for the GCS client; reading the bucket works without it |
 | `SCHEME_PREFIX_TEMPLATE` | `sap-exports/{year}/{month:02d}/` | Folder of a month's SAP exports (tries `01`, then `1`) |
 | `APP_ENV` | `local` | Which settings file to read: `.env.local`, `.env.dev`, `.env.uat` or `.env.prod`. Set it on every server; with `APP_ENV` unset the API starts only if auth is configured and is not the `.env.example` example |
@@ -490,11 +529,12 @@ are available for per-environment releases.
 | `LOADER_WORKERS` | `4` | Files the loader downloads and parses in parallel while saving the current one |
 | `TIMEZONE` | `Asia/Kolkata` | Decides the loader's default month (the current month in this timezone); the API always takes the month from the request |
 | `LOADER_SCHEDULE_ENABLED` | on outside `local` | The API runs the loader on a schedule (section 10); `false` where a cron job runs it instead |
-| `LOADER_DAILY_AT` | `09:00` | Daily run time (HH:MM in `TIMEZONE`) |
+| `LOADER_DAILY_AT` | `05:00` | Daily run time (HH:MM in `TIMEZONE`) |
 | `LOADER_RETRIES` | `3` | Tries again after a failed daily run |
 | `LOADER_RETRY_MINUTES` | `30` | Wait between those tries |
 | `LOADER_TIMEOUT_MINUTES` | `120` | A scheduled run taking longer is stopped; the next one carries on |
 | `LOADER_CATCH_UP_DAYS` | `3` | On days 1 to this of a month the previous month is loaded too |
+| `LOADER_RETENTION_MONTHS` | `3` | Months of schemes kept, the current one included (A-24); `0` keeps everything |
 | `CACHE_ENABLED` | `false` | Turns the Redis response cache on or off (section 17.1) |
 | `REDIS_URL` | — | Redis for the cache, e.g. `redis://host:6379/0`; the cache runs only when this is set and `CACHE_ENABLED=true` |
 | `CACHE_TTL_SECONDS` | `900` | Longest a cached response lives; new data replaces it sooner |
@@ -552,23 +592,22 @@ APP_ENV=<env> uv run python -m app --host 0.0.0.0 --port 8000 --workers 4
 
 Set `TRUSTED_PROXIES` to the nginx / load balancer address(es) and have nginx append the caller's
 address: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. If the platform must call
-uvicorn directly, use `uvicorn app.main:app … --no-server-header --no-proxy-headers`. Changed
-16 October 2026: the earlier `--proxy-headers --forwarded-allow-ips` command no longer decides the
-client IP.
+uvicorn directly, use `uvicorn app.main:app … --no-server-header --no-proxy-headers`.
 
-**Create tables once; the API then runs the loader daily at 09:00 IST:**
+**Create tables once; the API then runs the loader daily at 05:00 IST:**
 
 ```bash
 uv run python -m ingestion.run init-db
 ```
 
 The API needs the GCS settings too (the key file at `GOOGLE_APPLICATION_CREDENTIALS` must exist on
-the server). After a deploy the log shows `Loader schedule on: daily at 09:00 Asia/Kolkata`, and
-`Scheduled load of <year>-<month> finished` after 09:00 each day.
+the server, or the key is in `GCS_CREDENTIALS_JSON`; dev uses service account
+`scheme-loader@example-project.iam.gserviceaccount.com`, which can read `acme-scheme-files`). After a deploy the log shows `Loader schedule on: daily at 05:00 Asia/Kolkata`, and
+`Scheduled load of <year>-<month> finished` after 05:00 each day.
 
 **Operational checks**
 
-- `GET /health` for liveness probes.
+- `GET /health` for health probes; it also checks the database, so a deploy that cannot reach it fails the probe.
 - `Scheduled load of <year>-<month> exited with code 1` in the API log means at least one file failed;
   the loader's lines above it name the file and the reason.
 - A dropped database connection is retried (5 attempts, 10 s apart); the job resumes from the
@@ -606,7 +645,7 @@ if an API endpoint has no request. A copy is kept in the QA automation repositor
 |---|---|
 | `Scheme_API1_Current_Month.postman_collection.json` | API 1: requests, automatic tests, example responses (65 requests, 308 assertions) |
 | `Local.postman_environment.json` | Local development settings |
-| `Dev.postman_environment.json` | Dev settings (base URL to be filled in) |
+| `Dev.postman_environment.json` | Dev settings (base URL, client credentials and dealer code set per environment) |
 
 The collection has these folders:
 
@@ -673,9 +712,16 @@ review of the API and loader code, then fixes with regression tests. Full findin
 | A non-numeric cache version in Redis made every cached request fail (500) | The cache is bypassed and the database answers |
 | Swagger UI loaded any 5.x release from the CDN without an integrity check | Pinned release with SRI hashes; CSP limited to it |
 
-Reviewed and kept as designed: an old validity period stays after SAP corrects it (A-5), a row
-without an end date is one day (A-21), dates with spaces are not read (A-22), month and year may be
-sent as strings.
+Reviewed and kept as designed: a row without an end date is one day (A-21), dates with spaces are not
+read (A-22), month and year may be sent as strings.
+
+**Regression after the final changes (19–21 October 2026, local):** Playwright 98 passed, 3 skipped
+(same skips as above); Postman / newman 308 / 308 assertions; pytest 377 unit tests passed.
+
+**Regression after the qualification rule and ClearCut order (22 October 2026, local, auth on):**
+pytest 462 passed (unit + database tests); Playwright 99 passed, 3 skipped (deployed-only checks);
+Postman / newman 308 / 308 assertions (65 requests). An existing database upgraded by the new loader
+is identical to a fresh load, on the sample data (200,024 rows) and the real 16 Aug SAP file (50,000 rows).
 
 Test run of 15 October 2026 on a local environment (Apple M2, PostgreSQL in Docker, API with
 4 workers and auth enabled, 20,000 test dealers / 160,017 rows). Performance and the ZAP scan were
@@ -794,4 +840,103 @@ curl -X POST "https://<host>/v1/schemes/current-month" \
 | Upsert | Insert a row, or update it if it already exists |
 | VU | Virtual user in a k6 load test |
 | p95 / p99 | Response time that 95% / 99% of requests are faster than |
-| Cron | Scheduler that runs the loading job at fixed intervals |
+| Cron | Unix scheduler; an optional alternative to the API's built-in daily loader (`LOADER_SCHEDULE_ENABLED=false`) |
+
+## C. User guide: calling API 1
+
+For the client team calling API 1. It covers trying the API in a browser, calling it from code, reading
+the answer and what to do when a call fails. Section 12 has the full specification.
+
+### C.1 What you need
+
+| Item | Value |
+|---|---|
+| Base URL | Dev: `https://dev.example.com`. Production: shared when it is ready |
+| Client ID and client secret | Sent to you separately by the project team, one pair per environment. Keep the secret in a secret store; never put it in code, URLs, logs or e-mail |
+| Dealer code | The SAP customer code, e.g. `6100000001` |
+| Month and year | The month you want, e.g. `10` and `2026`. The current month and the two before it are kept |
+
+### C.2 Try the API in a browser (Swagger UI)
+
+The API's interactive page lets you call it without writing code. (Screenshots are left out of this public copy.)
+
+1. Open `<base URL>/docs`, e.g. `https://dev.example.com/docs`. The page lists three
+   calls: get a token, API 1, and the health check.
+
+2. Click **Authorize** (top right). In the window that opens, enter your **client_id** and
+   **client_secret**, tick **schemes:read**, and click **Authorize**.
+
+3. The window now shows **Authorized**: the page has fetched a token for you and sends it with every
+   call for the next hour. Click **Close**. If you see an error instead, the client ID or secret is
+   wrong.
+
+4. Click **POST /v1/schemes/current-month** to open it, then **Try it out**. Replace the request body
+   with your dealer code, month and year:
+
+   ```json
+   {"dealer_code": "6100000001", "month": 10, "year": 2026}
+   ```
+
+5. Click **Execute**. Under **Server response**, code **200** and a list of rows means success; the
+   **Download** button saves the answer as a file. An empty list `[]` means the dealer has no data
+   for that month.
+
+6. After an hour the token expires and calls return **401**. Click **Authorize**, then **Logout**,
+   and authorize again.
+
+### C.3 Call the API from your code
+
+1. **Get a token.** Send your client ID and secret to `POST /v1/auth/token` with
+   `grant_type=client_credentials` (form-encoded). The answer holds `access_token` and
+   `expires_in` (3,600 seconds).
+2. **Call API 1.** Send `POST /v1/schemes/current-month` with the header
+   `Authorization: Bearer <access_token>` and the JSON body
+   `{"dealer_code": "...", "month": 10, "year": 2026}`.
+3. **Reuse the token** for all calls during its hour. Get a new one about a minute before it expires,
+   or when a call returns `401`, and then repeat that call once. Do not get a token per call: the
+   token endpoint allows 30 requests a minute from one address.
+
+The same two steps with `curl`:
+
+```bash
+TOKEN=$(curl -s -X POST "https://dev.example.com/v1/auth/token" \
+  -d grant_type=client_credentials -d client_id="$CLIENT_ID" --data-urlencode client_secret="$CLIENT_SECRET" \
+  | jq -r .access_token)
+
+curl -s -X POST "https://dev.example.com/v1/schemes/current-month" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
+```
+
+Appendix A has the same in Python and JavaScript. The Postman collection (section 18) does the token
+step for you: import it, choose the environment, fill in your client ID and secret, and send.
+
+### C.4 Read the answer
+
+- One row per component and validity period, ordered by `ClearCut`, highest first. Rows with the same
+  `ClearCut` are ordered by end date (`ToDate`), then by the template's component order (EB SLAB 1–3,
+  VALUE, VALUE %, VALUE FA, LUXURY, PREMIUM 01/02, EB FULL MONTH), then every other component by
+  name. Section 5 explains each field.
+- `Qualification` is GSR for EB, Value, ROLLER, SANDPAPER and MASKING TAPE, and invoiced quantity for
+  every other component. Rows of components outside the 10 also carry `QualificationBasis`
+  (`"GSR"` or `"INVOICE_QTY"`) and `InvoicedQty`.
+- EB slab amounts are running totals from the 1st of the month, not amounts for the slab alone.
+- `[]` means no data for that dealer and month: check the dealer code, and that the month is the
+  current one or one of the two before it.
+- SAP sends updates every morning (around 04:30–05:00 India time) and the API loads them at 05:00, so
+  today's answer can differ from yesterday's.
+
+### C.5 When a call fails
+
+| You get | Meaning | What to do |
+|---|---|---|
+| 401 `Not authenticated` | No token sent | Add `Authorization: Bearer <token>` (in Swagger UI: **Authorize**) |
+| 401 `Token expired` / `Invalid token` | Token over an hour old, or not valid | Get a new token and repeat the call once |
+| 401 `invalid_client` (token call) | Wrong client ID or secret | Check both; ask the project team if they still fail |
+| 422 | The body is not valid; `detail` says which field and why | Fix the field, e.g. a month of `13` or a dealer code with a dash |
+| 429 `Too many requests` | Too many calls from your address | Wait the `Retry-After` seconds, then slow down |
+| 503 `Service busy, please retry` | The API could not reach its database in time | Retry after `Retry-After` seconds; if it lasts more than a few minutes, tell the project team |
+| 500 `Internal server error` | Unexpected error | Tell the project team the time of the call |
+
+`GET <base URL>/health` (no token) answers `{"ok": true}` when the API and its database are up, and
+503 when the database cannot be reached, so it is a quick check before reporting a problem.

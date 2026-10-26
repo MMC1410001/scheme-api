@@ -1,5 +1,6 @@
-// API 1 — POST /v1/schemes/current-month: the dealer's rows for the 10 template components in the
-// requested month. Body: {"dealer_code": ..., "month": 1-12, "year": 2000-2100}.
+// API 1 — POST /v1/schemes/current-month: the dealer's rows in the requested month, every component SAP
+// sends, by ClearCut highest first (components outside the 10 also carry QualificationBasis and InvoicedQty).
+// Body: {"dealer_code": ..., "month": 1-12, "year": 2000-2100}.
 // Settings (API_BASE_URL, CLIENT_ID, CLIENT_SECRET, DEALER_CODE, SAMPLE_DATA, MONTH, YEAR, ...) are described in helpers.js.
 const crypto = require('crypto');
 const {
@@ -13,6 +14,20 @@ const FIELDS = ['Customer', 'FromDate', 'ToDate', 'ComponentDescription', 'Quali
 const AMOUNTS = ['Qualification', 'GsrB', 'RebateRate', 'ClearCut', 'ShortfallAmount', 'ShortfallPct', 'NextSlabRate'];
 const COMPONENTS = ['EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'VALUE %', 'VALUE FA', 'LUXURY', 'PREMIUM 01',
   'PREMIUM 02', 'EB FULL MONTH'];
+// Qualification rule (2026-10-22): these qualify on GSR, every other component on invoiced quantity.
+const GSR_COMPONENTS = ['EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'EB FULL MONTH', 'VALUE', 'VALUE %', 'VALUE FA',
+  'ROLLER', 'SANDPAPER', 'MASKING TAPE'];
+// ClearCut highest first, empty ClearCut last; equal ClearCut: by ToDate, then the 10 in template order,
+// then other components by name.
+const rank = (name) => (COMPONENTS.includes(name) ? [COMPONENTS.indexOf(name), ''] : [COMPONENTS.length, name]);
+const templateOrder = (a, b) => {
+  const [ra, rb] = [rank(a.ComponentDescription), rank(b.ComponentDescription)];
+  return a.ToDate < b.ToDate || (a.ToDate === b.ToDate && (ra[0] < rb[0] || (ra[0] === rb[0] && ra[1] <= rb[1])));
+};
+const inOrder = (a, b) => {
+  if (a.ClearCut === b.ClearCut) return templateOrder(a, b);
+  return b.ClearCut === null || (a.ClearCut !== null && a.ClearCut > b.ClearCut);
+};
 const MONTH_PREFIX = `${MONTH.year}-${String(MONTH.month).padStart(2, '0')}`;
 const MONTH_END = `${MONTH_PREFIX}-${String(new Date(Date.UTC(MONTH.year, MONTH.month, 0)).getUTCDate()).padStart(2, '0')}`;
 
@@ -42,21 +57,27 @@ test.describe('API 1 - Monthly schemes', () => {
       expect(rows.length).toBeGreaterThan(0);
     });
 
-    test('API1_TC_2 Rows have exactly the 11 fields (template + NextSlabRate)', async () => {
-      for (const row of await rowsFor(DEALER)) expect(Object.keys(row).sort()).toEqual([...FIELDS].sort());
+    test('API1_TC_2 Rows of the 10 have exactly the 11 fields (template + NextSlabRate); others add QualificationBasis and InvoicedQty', async () => {
+      for (const row of await rowsFor(DEALER)) {
+        const expected = COMPONENTS.includes(row.ComponentDescription) ? FIELDS : [...FIELDS, 'QualificationBasis', 'InvoicedQty'];
+        expect(Object.keys(row).sort(), row.ComponentDescription).toEqual([...expected].sort());
+      }
     });
 
-    test('API1_TC_3 Only the 10 template components are returned', async () => {
-      for (const row of await rowsFor(DEALER)) expect(COMPONENTS).toContain(row.ComponentDescription);
+    test('API1_TC_3 Components outside the 10: QualificationBasis GSR for ROLLER, SANDPAPER, MASKING TAPE, else INVOICE_QTY with Qualification = InvoicedQty', async () => {
+      for (const row of (await rowsFor(DEALER)).filter((r) => !COMPONENTS.includes(r.ComponentDescription))) {
+        const gsr = GSR_COMPONENTS.includes(row.ComponentDescription);
+        expect(row.QualificationBasis, row.ComponentDescription).toBe(gsr ? 'GSR' : 'INVOICE_QTY');
+        expect(row.InvoicedQty === null || typeof row.InvoicedQty === 'number', row.ComponentDescription).toBe(true);
+        if (!gsr) expect(row.Qualification, row.ComponentDescription).toBe(row.InvoicedQty);
+      }
     });
 
-    test('API1_TC_4 Rows are ordered by ToDate, then template component order', async () => {
+    test('API1_TC_4 Rows are ordered by ClearCut highest first (empty last); equal ClearCut by ToDate, template order, then name', async () => {
       const rows = await rowsFor(DEALER);
       for (let i = 1; i < rows.length; i++) {
         const [a, b] = [rows[i - 1], rows[i]];
-        const ordered = a.ToDate < b.ToDate ||
-          (a.ToDate === b.ToDate && COMPONENTS.indexOf(a.ComponentDescription) <= COMPONENTS.indexOf(b.ComponentDescription));
-        expect(ordered, `${a.ComponentDescription} (${a.ToDate}) before ${b.ComponentDescription} (${b.ToDate})`).toBe(true);
+        expect(inOrder(a, b), `${a.ComponentDescription} (${a.ClearCut}, ${a.ToDate}) before ${b.ComponentDescription} (${b.ClearCut}, ${b.ToDate})`).toBe(true);
       }
     });
 
@@ -116,11 +137,11 @@ test.describe('API 1 - Monthly schemes', () => {
       }
     });
 
-    test('API1_TC_14 Each component appears at most once per dealer (newest SAP update only)', async () => {
+    test('API1_TC_14 Each component appears at most once per start date (newest SAP update only)', async () => {
       // SAP can resend a scheme with a corrected end date or under a new agreement number; only the
       // newest version may come back (dev, Sept 2026: EB SLAB 2 1-18 Sep and 1-19 Sep both returned).
-      const names = (await rowsFor(DEALER)).map((r) => r.ComponentDescription);
-      expect(new Set(names).size).toBe(names.length);
+      const schemes = (await rowsFor(DEALER)).map((r) => `${r.ComponentDescription} ${r.FromDate}`);
+      expect(new Set(schemes).size).toBe(schemes.length);
     });
 
     test('API1_TC_15 Every row is valid in the requested month (validity period overlaps it)', async () => {
@@ -134,7 +155,27 @@ test.describe('API 1 - Monthly schemes', () => {
     test('API1_TC_16 [sample data] Sample dealer has all 10 components', async () => {
       test.skip(!SAMPLE_DATA, 'needs scripts/make_sample_data.py data');
       const rows = await rowsFor('6100000001');
-      expect(rows.map((r) => r.ComponentDescription).sort()).toEqual([...COMPONENTS].sort());
+      const template = rows.map((r) => r.ComponentDescription).filter((name) => COMPONENTS.includes(name));
+      expect(template.sort()).toEqual([...COMPONENTS].sort());
+    });
+
+    test('API1_TC_80 [sample data] Outside the 10: ALWD EB2 qualifies on invoiced quantity, ROLLER on GSR (Q)', async () => {
+      test.skip(!SAMPLE_DATA, 'needs scripts/make_sample_data.py data');
+      const rows = await rowsFor('6100000001');
+      const other = rows.find((r) => r.ComponentDescription === 'ALWD EB2');
+      expect(other).toMatchObject({ Qualification: 12.5, QualificationBasis: 'INVOICE_QTY', InvoicedQty: 12.5 });
+      const roller = rows.find((r) => r.ComponentDescription === 'ROLLER');
+      expect(roller).toMatchObject({ Qualification: 11350, QualificationBasis: 'GSR', InvoicedQty: 50 });
+      const luxury = rows.find((r) => r.ComponentDescription === 'LUXURY');
+      expect(luxury).not.toHaveProperty('InvoicedQty');
+      expect(luxury).not.toHaveProperty('QualificationBasis');
+    });
+
+    test('API1_TC_81 [sample data] Rows come by ClearCut highest first: ROLLER, LUXURY, then the zero ClearCut rows', async () => {
+      test.skip(!SAMPLE_DATA, 'needs scripts/make_sample_data.py data');
+      const names = (await rowsFor('6100000001')).map((r) => r.ComponentDescription);
+      expect(names).toEqual(['ROLLER', 'LUXURY', 'EB SLAB 1', 'EB SLAB 2', 'EB SLAB 3', 'VALUE', 'VALUE %', 'VALUE FA',
+        'PREMIUM 01', 'PREMIUM 02', 'EB FULL MONTH', 'ALWD EB2']);
     });
 
     test('API1_TC_17 [sample data] Latest SAP update wins (day-2 LUXURY values replace, not add)', async () => {

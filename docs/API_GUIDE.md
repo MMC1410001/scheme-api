@@ -28,13 +28,13 @@ refreshed automatically as new exports arrive (several times a day).
 |---|---|---|
 | Auth | `POST /v1/auth/token` | Get an access token (OAuth2 client credentials) |
 | API 1 | `POST /v1/schemes/current-month` | A dealer's scheme rows for a given month and year |
-| Health | `GET /health` | Liveness check |
+| Health | `GET /health` | Health check: 200 `{"ok": true}` when the API and its database are up, else 503 |
 
 ### 1.2 Environments
 
 | Environment | Base URL |
 |---|---|
-| Dev | *to be confirmed* |
+| Dev | `https://dev.example.com` (Swagger UI at `/docs`) |
 | Production | *to be confirmed* |
 
 All production traffic must use HTTPS.
@@ -109,9 +109,17 @@ Send `Content-Type: application/json`. Bodies larger than 4 KB are rejected.
 `POST /v1/schemes/current-month`
 
 Returns one row per scheme component for the dealer, for the month and year in the request.
-Only these 10 components are returned:
+Every component SAP sends is returned, ordered by `ClearCut`, highest first (an empty `ClearCut`
+last). Rows with the same `ClearCut` (most are 0) are ordered by end date, then these 10 (in this
+order), then the others by name:
 
 `EB SLAB 1`, `EB SLAB 2`, `EB SLAB 3`, `VALUE`, `VALUE %`, `VALUE FA`, `LUXURY`, `PREMIUM 01`, `PREMIUM 02`, `EB FULL MONTH`
+
+`Qualification` is GSR for EB (EB SLAB 1-3, EB FULL MONTH), Value (VALUE, VALUE %, VALUE FA),
+ROLLER, SANDPAPER and MASKING TAPE, and invoiced quantity (Q) for every other component (LUXURY,
+PREMIUM 01/02 and the rest). Rows of components outside the 10 carry two more fields:
+`QualificationBasis` (`GSR` or `INVOICE_QTY`, what `Qualification` holds) and `InvoicedQty` (SAP
+Invoiced Quantity (Q)); rows of the 10 have neither.
 
 **Example request**
 
@@ -122,23 +130,10 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
   -d '{"dealer_code": "6100000001", "month": 10, "year": 2026}'
 ```
 
-**Example response** `200 OK` (shortened to 2 of the 10 rows)
+**Example response** `200 OK` (shortened to 2 rows, highest `ClearCut` first)
 
 ```json
 [
-  {
-    "Customer": "6100000001",
-    "FromDate": "2026-10-01",
-    "ToDate": "2026-10-11",
-    "ComponentDescription": "EB SLAB 1",
-    "Qualification": 405232.86,
-    "GsrB": 405232.86,
-    "RebateRate": 0.75,
-    "ClearCut": 0.0,
-    "ShortfallAmount": 0.0,
-    "ShortfallPct": 0.0,
-    "NextSlabRate": 1.0
-  },
   {
     "Customer": "6100000001",
     "FromDate": "2026-10-01",
@@ -151,6 +146,19 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
     "ShortfallAmount": 84.9,
     "ShortfallPct": 21.23,
     "NextSlabRate": 1.5
+  },
+  {
+    "Customer": "6100000001",
+    "FromDate": "2026-10-01",
+    "ToDate": "2026-10-11",
+    "ComponentDescription": "EB SLAB 1",
+    "Qualification": 405232.86,
+    "GsrB": 405232.86,
+    "RebateRate": 0.75,
+    "ClearCut": 0.0,
+    "ShortfallAmount": 0.0,
+    "ShortfallPct": 0.0,
+    "NextSlabRate": 1.0
   }
 ]
 ```
@@ -163,13 +171,15 @@ curl -X POST "$BASE_URL/v1/schemes/current-month" \
 | `FromDate` | date `YYYY-MM-DD` | Start of the component's validity | Valid from |
 | `ToDate` | date `YYYY-MM-DD` | End of the component's validity | To |
 | `ComponentDescription` | string | One of the 10 components above | Comp desc |
-| `Qualification` | number | **GSR** for EB slabs, EB Full Month and Value; **invoiced quantity** for Luxury and Premium | GSR (Q); for EB Full Month GSR (B), the same GSR the slabs show; Invoiced Quantity(Q) |
+| `Qualification` | number | **GSR** for EB slabs, EB Full Month, Value (VALUE, VALUE %, VALUE FA), ROLLER, SANDPAPER and MASKING TAPE; **invoiced quantity** for every other component (Luxury, Premium and the rest) | GSR (Q); for EB Full Month GSR (B), the same GSR the slabs show; Invoiced Quantity(Q) |
 | `GsrB` | number | Gross Sales Revenue used for the benefit | GSR (B) |
 | `RebateRate` | number | Rebate rate | Rebate Rate |
 | `ClearCut` | number | Clear-cut credit note amount | Clear Cut CN |
 | `ShortfallAmount` | number | Shortfall to the next slab | Short Fall |
 | `ShortfallPct` | number | Shortfall as a percentage | Short Fall % |
 | `NextSlabRate` | number | Rebate rate of the next slab | Next Slab Rate |
+| `QualificationBasis` | string | Only on components outside the 10: what `Qualification` holds, `GSR` (ROLLER, SANDPAPER, MASKING TAPE) or `INVOICE_QTY` (the others) | — |
+| `InvoicedQty` | number | Only on components outside the 10: invoiced quantity (equal to `Qualification` when `QualificationBasis` is `INVOICE_QTY`) | Invoiced Quantity (Q) |
 
 Amounts are JSON numbers and can be negative (for example after returns). Any amount may be
 `null` if SAP left it blank.
@@ -186,7 +196,8 @@ new month's folder, and those rows stay in last month. Each component is returne
 date (`FromDate`): SAP's newest update, from any folder, even if SAP changed the end date or
 re-issued the scheme under a new agreement number. Rows without dates fall back to their folder's month. A new month's data
 appears once its first SAP export has been loaded (usually within hours of the 1st); until then
-that month returns `[]`. Earlier months stay available.
+that month returns `[]`. Only the current month and the two before it are kept (in October: October,
+September, August); older months return `[]`.
 
 **Cumulative amounts:** EB amounts are running totals from the 1st. If EB SLAB 1 (1–10 Oct) shows
 10 lakh and EB SLAB 2 (1–15 Oct) shows 12 lakh, the total is 12 lakh, not 22. Do not add the slabs.
