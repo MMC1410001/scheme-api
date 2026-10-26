@@ -1,0 +1,77 @@
+Run started:2026-10-16 10:41:44.981108+00:00
+
+Test results:
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '<client secret>'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: <repo>/app/openapi_examples.py:84:68
+83	        "application/json": {"schema": _TOKEN_SCHEMA, "example": {
+84	            "grant_type": "client_credentials", "client_id": "partner", "client_secret": "<client secret>"}},
+85	    },
+86	}
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: <repo>/app/openapi_examples.py:89:28
+88	                        "content": {"application/json": {"example": {
+89	                            "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", "token_type": "Bearer",
+90	                            "expires_in": 3600, "scope": "schemes:read"}}}}}
+91	
+92	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'Bearer'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: <repo>/app/openapi_examples.py:89:87
+88	                        "content": {"application/json": {"example": {
+89	                            "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", "token_type": "Bearer",
+90	                            "expires_in": 3600, "scope": "schemes:read"}}}}}
+91	
+92	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '/v1/auth/token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: <repo>/app/security.py:46:12
+45	
+46	TOKEN_URL = "/v1/auth/token"
+47	ISSUER = AUDIENCE = "scheme-api"
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'Bearer'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: <repo>/app/security.py:234:62
+233	    log.info("Token issued to client %s", client_id)
+234	    body = {"access_token": issue_token(client_id, settings), "token_type": "Bearer",
+235	            "expires_in": settings.jwt_ttl_seconds, "scope": SCOPE}
+236	    return JSONResponse(body, headers={"Pragma": "no-cache"})
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 1668
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 1
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 5
+		Medium: 0
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 5
+		High: 0
+Files skipped (0):

@@ -1,0 +1,15 @@
+{
+  "_about": "Made-up dealer codes matching the sample data (scripts/make_sample_data.py). For a real environment, build the real list with pick_dealers.py; that file is never committed. First code per month is the main test dealer.",
+  "source_env": "sample",
+  "generated_at": "2026-10-26T00:00:00+00:00",
+  "months": {
+    "2026-09": [
+      "6100000001",
+      "6100000002"
+    ],
+    "2026-10": [
+      "6100000001",
+      "6100000002"
+    ]
+  }
+}

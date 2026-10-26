@@ -1,0 +1,2 @@
+Installed 28 packages in 68ms
+No known vulnerabilities found
