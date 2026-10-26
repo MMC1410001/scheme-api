@@ -50,6 +50,11 @@
 - Figure 4 — Ingestion job: what happens to each file
 - Figure 5 — API request lifecycle and responses
 - Figure 6 — Data model (PostgreSQL)
+- Figure 7 — Swagger UI: the API's page
+- Figure 8 — Swagger UI: Authorize with client_id and client_secret
+- Figure 9 — Swagger UI: authorized
+- Figure 10 — Swagger UI: request body for a dealer and month
+- Figure 11 — Swagger UI: the response
 
 # Part A — Requirements
 
@@ -858,17 +863,24 @@ the answer and what to do when a call fails. Section 12 has the full specificati
 
 ### C.2 Try the API in a browser (Swagger UI)
 
-The API's interactive page lets you call it without writing code. (Screenshots are left out of this public copy.)
+The API's interactive page lets you call it without writing code. The screenshots below were taken
+on a local copy of the API with made-up sample data; Dev looks the same.
 
 1. Open `<base URL>/docs`, e.g. `https://dev.example.com/docs`. The page lists three
    calls: get a token, API 1, and the health check.
 
+   ![Figure 7 — Swagger UI: the API's page](figures/fig7_swagger_home.png)
+
 2. Click **Authorize** (top right). In the window that opens, enter your **client_id** and
    **client_secret**, tick **schemes:read**, and click **Authorize**.
+
+   ![Figure 8 — Swagger UI: Authorize with client_id and client_secret](figures/fig8_swagger_authorize.png)
 
 3. The window now shows **Authorized**: the page has fetched a token for you and sends it with every
    call for the next hour. Click **Close**. If you see an error instead, the client ID or secret is
    wrong.
+
+   ![Figure 9 — Swagger UI: authorized](figures/fig9_swagger_authorized.png)
 
 4. Click **POST /v1/schemes/current-month** to open it, then **Try it out**. Replace the request body
    with your dealer code, month and year:
@@ -877,9 +889,13 @@ The API's interactive page lets you call it without writing code. (Screenshots a
    {"dealer_code": "6100000001", "month": 10, "year": 2026}
    ```
 
+   ![Figure 10 — Swagger UI: request body for a dealer and month](figures/fig10_swagger_try_it_out.png)
+
 5. Click **Execute**. Under **Server response**, code **200** and a list of rows means success; the
    **Download** button saves the answer as a file. An empty list `[]` means the dealer has no data
    for that month.
+
+   ![Figure 11 — Swagger UI: the response](figures/fig11_swagger_response.png)
 
 6. After an hour the token expires and calls return **401**. Click **Authorize**, then **Logout**,
    and authorize again.
